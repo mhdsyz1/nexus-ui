@@ -20,33 +20,32 @@ interface QueueItem {
 }
 
 // ============================================================================
-// WIDGET: MACROECONOMIC NEWS & TIMELINE
+// WIDGET: ECONOMIC CALENDAR (FOREX FACTORY STYLE)
 // ============================================================================
-function MacroNewsWidget() {
+function EconomicCalendarWidget() {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!container.current) return;
     container.current.innerHTML = "";
     const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-timeline.js";
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-events.js";
     script.type = "text/javascript";
     script.async = true;
     script.innerHTML = JSON.stringify({
-      feedMode: "market",
-      market: "forex", // Filters for currency and commodity-impacting news
+      colorTheme: "dark",
       isTransparent: true,
-      displayMode: "regular",
       width: "100%",
       height: "100%",
-      colorTheme: "dark",
-      locale: "en"
+      locale: "en",
+      importanceFilter: "-1,0,1", // Shows all impacts (Low, Medium, High)
+      currencyFilter: "USD,EUR,GBP,JPY,AUD,CAD,CHF" // Major pairs that impact XAUUSD liquidity
     });
     container.current.appendChild(script);
   }, []);
 
   return (
-    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-[350px]" ref={container}>
+    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-[400px]" ref={container}>
       <div className="tradingview-widget-container__widget w-full flex-1" />
     </div>
   );
@@ -148,7 +147,7 @@ export default function QuantTerminal() {
       {/* SCROLLABLE MAIN CONTENT CANVAS */}
       <main className="flex-1 overflow-y-auto p-4 pb-24">
         
-        {/* PAGE 1: TERMINAL (News + Queue) */}
+        {/* PAGE 1: TERMINAL (Calendar + Queue) */}
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
@@ -177,7 +176,7 @@ export default function QuantTerminal() {
             </div>
 
             <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md">
-              <MacroNewsWidget />
+              <EconomicCalendarWidget />
             </div>
           </div>
         )}
