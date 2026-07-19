@@ -166,11 +166,23 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100; // Standard XAUUSD Contract
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 6. Manual Trade Resolution (Optimistic UI Update)
+  // 6. Manual Trade Resolution (Routed through Python Risk Engine)
   const resolveTrade = async (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     try {
+      // Instantly update UI on mobile so it feels crisp and responsive
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
-      await supabase.from("execution_queue").update({ status: outcome }).eq("id", id);
+      
+      // Route the data to the Python Backend for Drawdown Evaluation
+      await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          secret_token: "SuperSecretSecureToken2026!", // <-- REPLACE THIS WITH YOUR RAILWAY ENV TOKEN
+          trade_id: id, 
+          outcome: outcome 
+        })
+      });
+      
     } catch (err) {
       console.error("Failed to update trade outcome:", err);
     }
