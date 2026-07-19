@@ -123,7 +123,7 @@ export default function QuantTerminal() {
       </header>
 
       {/* CORE CONTROL MODULES */}
-      <main className="flex-1 grid grid-cols-12 gap-4 min-h-[600px]">
+      <main className="flex-1 grid grid-cols-12 gap-4 min-h-150">
         {/* LEFT COLUMN: CONTROLS */}
         <div className="col-span-3 p-4 border border-border/50 rounded-lg bg-card flex flex-col justify-between">
           <div>
