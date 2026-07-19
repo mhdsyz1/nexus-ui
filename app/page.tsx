@@ -111,7 +111,7 @@ export default function QuantTerminal() {
     if (!adminKey) return; 
 
     try {
-      const res = await fetch("https://YOUR-RAILWAY-APP-URL.up.railway.app/api/kill-switch", {
+      const res = await fetch("https://nexus-backend-production.up.railway.app/api/kill-switch", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
         body: JSON.stringify({ action: currentAction })
@@ -123,13 +123,10 @@ export default function QuantTerminal() {
     }
   };
 
-  // Quantitative XAUUSD Position Sizing Logic
   const handleCalculate = () => {
     const riskAmount = calcEquity * (calcRiskPct / 100);
     const slDistance = Math.abs(calcEntry - calcSL);
-    
-    // Standard Gold Contract Size = 100 oz per 1.00 Lot
-    const pipValuePerLot = 100; // $1 movement in gold = $100 per 1.0 standard lot
+    const pipValuePerLot = 100;
     
     let lotSize = 0;
     if (slDistance > 0) {
@@ -143,34 +140,20 @@ export default function QuantTerminal() {
   return (
     <div className="min-h-screen bg-background text-foreground p-2 md:p-4 flex flex-col gap-4">
       
-      {/* MOBILE-RESPONSIVE TOP NAVIGATION */}
+      {/* HEADER */}
       <header className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
         <div className="col-span-2 md:col-span-1 p-3 border border-border/50 rounded-lg bg-card flex flex-col justify-center">
           <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Neural Nexus</h2>
           <div className="flex gap-2 mt-2">
-            <Button 
-              size="sm" 
-              variant={activeTab === "TERMINAL" ? "default" : "outline"}
-              onClick={() => setActiveTab("TERMINAL")}
-              className="text-xs w-full"
-            >
-              TERMINAL
-            </Button>
-            <Button 
-              size="sm" 
-              variant={activeTab === "CALCULATOR" ? "default" : "outline"}
-              onClick={() => setActiveTab("CALCULATOR")}
-              className="text-xs w-full"
-            >
-              CALCULATOR
-            </Button>
+            <Button size="sm" variant={activeTab === "TERMINAL" ? "default" : "outline"} onClick={() => setActiveTab("TERMINAL")} className="text-xs w-full">TERMINAL</Button>
+            <Button size="sm" variant={activeTab === "CALCULATOR" ? "default" : "outline"} onClick={() => setActiveTab("CALCULATOR")} className="text-xs w-full">CALCULATOR</Button>
           </div>
         </div>
-        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex flex-col justify-center hidden md:flex">
+        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex-col justify-center hidden md:flex">
           <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Total Equity</h2>
           <p className="text-lg font-bold font-mono">${config.total_equity.toFixed(2)}</p>
         </div>
-        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex flex-col justify-center hidden md:flex">
+        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex-col justify-center hidden md:flex">
           <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Risk Exposure</h2>
           <p className="text-lg font-bold font-mono text-destructive">Max Layers: {config.max_allowed_layers}</p>
         </div>
@@ -185,28 +168,24 @@ export default function QuantTerminal() {
         </div>
       </header>
 
-      {/* DYNAMIC TAB RENDERING */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 min-h-[600px]">
+        
+        {/* TERMINAL TAB */}
         {activeTab === "TERMINAL" && (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-            {/* LEFT COLUMN: CONTROLS (Stacks on top for mobile) */}
             <div className="col-span-1 md:col-span-3 p-4 border border-border/50 rounded-lg bg-card flex flex-col justify-between order-2 md:order-1">
               <div className="pt-4 border-t border-border/50">
                 <Button 
                   onClick={toggleKillSwitch}
                   variant={config.system_is_killed ? "default" : "destructive"} 
-                  className={`w-full font-bold font-mono tracking-wider border transition-colors ${
-                    config.system_is_killed 
-                      ? "bg-emerald-950 text-emerald-400 border-emerald-800 hover:bg-emerald-900" 
-                      : "bg-red-950 text-red-400 border-red-800 hover:bg-red-900"
-                  }`}
+                  className={`w-full font-bold font-mono tracking-wider border transition-colors ${config.system_is_killed ? "bg-emerald-950 text-emerald-400 border-emerald-800 hover:bg-emerald-900" : "bg-red-950 text-red-400 border-red-800 hover:bg-red-900"}`}
                 >
                   {config.system_is_killed ? "🟢 RESTORE SYSTEM" : "🛑 KILL SWITCH"}
                 </Button>
               </div>
             </div>
 
-            {/* MIDDLE COLUMN: LIVE CHART */}
             <div className="col-span-1 md:col-span-6 p-2 md:p-4 border border-border/50 rounded-lg bg-card flex flex-col order-1 md:order-2">
               <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-2 font-sans uppercase">Live Charting (XAUUSD)</h3>
               <div className="flex-1 border border-border/20 rounded bg-zinc-950 overflow-hidden min-h-[350px]">
@@ -214,7 +193,6 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            {/* RIGHT COLUMN: EVENT QUEUE */}
             <div className="col-span-1 md:col-span-3 p-4 border border-border/50 rounded-lg bg-card flex flex-col order-3">
               <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-4 font-sans uppercase">Execution Queue</h3>
               <div className="flex-1 overflow-y-auto space-y-2 pr-2">
@@ -239,29 +217,27 @@ export default function QuantTerminal() {
           </div>
         )}
 
+        {/* CALCULATOR TAB */}
         {activeTab === "CALCULATOR" && (
-          <div className="max-w-md mx-auto p-6 border border-border/50 rounded-lg bg-card">
+          <div className="w-full max-w-md mx-auto p-4 md:p-6 border border-border/50 rounded-lg bg-card">
             <h3 className="text-lg font-bold font-mono mb-4 text-primary border-b border-border/50 pb-2">XAUUSD Position Sizer</h3>
             
             <div className="space-y-4 font-mono text-sm">
               <div className="flex flex-col gap-1">
                 <label className="text-muted-foreground">Account Equity ($)</label>
-                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(Number(e.target.value))} className="p-2 bg-background border border-border rounded" />
+                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
               </div>
-              
               <div className="flex flex-col gap-1">
                 <label className="text-muted-foreground">Risk Percentage (%)</label>
-                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(Number(e.target.value))} className="p-2 bg-background border border-border rounded" />
+                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
               </div>
-              
               <div className="flex flex-col gap-1">
                 <label className="text-muted-foreground">Entry Price</label>
-                <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(Number(e.target.value))} className="p-2 bg-background border border-border rounded" />
+                <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
               </div>
-              
               <div className="flex flex-col gap-1">
                 <label className="text-muted-foreground">Stop Loss Price</label>
-                <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(Number(e.target.value))} className="p-2 bg-background border border-border rounded" />
+                <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
               </div>
 
               <Button onClick={handleCalculate} className="w-full mt-4 font-bold tracking-wider">CALCULATE LOT SIZE</Button>
@@ -285,6 +261,7 @@ export default function QuantTerminal() {
             </div>
           </div>
         )}
+
       </main>
     </div>
   );
