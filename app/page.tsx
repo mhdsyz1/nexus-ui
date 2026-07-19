@@ -63,14 +63,22 @@ export default function QuantTerminal() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0 });
   const [loading, setLoading] = useState(true);
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
-  // Calculator States (Using strings to allow typing decimals smoothly)
+  // Calculator States 
   const [calcEquity, setCalcEquity] = useState<string>("800");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
   const [calcEntry, setCalcEntry] = useState<string>("2350.00");
   const [calcSL, setCalcSL] = useState<string>("2345.00");
 
-  // 1. Telemetry & Analytics Polling
+  // 1. Live Clock Sync (Prevents Next.js Hydration Mismatch)
+  useEffect(() => {
+    setCurrentTime(new Date());
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 2. Telemetry & Analytics Polling
   useEffect(() => {
     async function fetchDashboardData() {
       try {
@@ -121,14 +129,14 @@ export default function QuantTerminal() {
     return () => clearInterval(interval);
   }, []);
 
-  // 2. Auto-sync Calculator Equity with Live Database Equity
+  // 3. Auto-sync Calculator Equity with Live Database Equity
   useEffect(() => {
     if (config.total_equity) {
       setCalcEquity(config.total_equity.toString());
     }
   }, [config.total_equity]);
 
-  // 3. Admin Kill Switch Execution
+  // 4. Admin Kill Switch Execution
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
@@ -148,7 +156,7 @@ export default function QuantTerminal() {
     }
   };
 
-  // 4. Reactive Math Execution (No button required)
+  // 5. Reactive Math Execution (No button required)
   const equityNum = parseFloat(calcEquity) || 0;
   const riskPctNum = parseFloat(calcRiskPct) || 0;
   const entryNum = parseFloat(calcEntry) || 0;
@@ -160,13 +168,10 @@ export default function QuantTerminal() {
 
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 5. Manual Trade Resolution (Optimistic UI Update)
+  // 6. Manual Trade Resolution (Optimistic UI Update)
   const resolveTrade = async (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     try {
-      // Instantly update UI on mobile so there's no visual lag
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
-      
-      // Sync choice to Supabase Ledger
       await supabase.from("execution_queue").update({ status: outcome }).eq("id", id);
     } catch (err) {
       console.error("Failed to update trade outcome:", err);
@@ -184,7 +189,10 @@ export default function QuantTerminal() {
             {config.system_is_killed ? "SYSTEM HALTED" : "NEXUS LIVE"}
           </h1>
         </div>
-        <div className="text-sm font-bold text-primary">${config.total_equity.toFixed(2)}</div>
+        {/* LIVE CLOCK */}
+        <div className="text-sm font-bold text-muted-foreground">
+          {currentTime ? currentTime.toLocaleTimeString('en-SG', { hour12: false }) : "--:--:--"}
+        </div>
       </header>
 
       {/* SCROLLABLE MAIN CONTENT CANVAS */}
@@ -194,18 +202,22 @@ export default function QuantTerminal() {
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             
-            {/* ANALYTICS DASHBOARD */}
-            <div className="grid grid-cols-3 gap-2">
+            {/* UPGRADED 2x2 ANALYTICS DASHBOARD */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
+                <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
+              </div>
               <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
                 <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
               </div>
               <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Wins</span>
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Wins</span>
                 <span className="text-lg font-bold text-foreground">{analytics.totalWins}</span>
               </div>
               <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Losses</span>
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
                 <span className="text-lg font-bold text-foreground">{analytics.totalLosses}</span>
               </div>
             </div>
