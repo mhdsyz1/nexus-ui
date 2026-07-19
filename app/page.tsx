@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -17,6 +17,10 @@ interface QueueItem {
   action: string;
   status: string;
   created_at: string;
+  zone_low?: number;
+  zone_high?: number;
+  stop_loss?: number;
+  take_profit?: number;
 }
 
 // ============================================================================
@@ -82,20 +86,17 @@ export default function QuantTerminal() {
   useEffect(() => {
     async function fetchDashboardData() {
       try {
-        // Fetch Risk Config
         const { data: configData, error: configError } = await supabase
           .from("risk_configuration")
           .select("total_equity, max_allowed_layers, system_is_killed")
           .order("id", { ascending: false }).limit(1).single();
 
-        if (!configError && configData) {
-          setConfig(configData);
-        }
+        if (!configError && configData) setConfig(configData);
 
-        // Fetch Live Queue
+        // Fetch Live Queue (Now including signal metrics)
         const { data: queueData, error: queueError } = await supabase
           .from("execution_queue")
-          .select("id, ticker, action, status, created_at")
+          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit")
           .order("created_at", { ascending: false }).limit(5);
 
         if (!queueError && queueData) setQueue(queueData);
@@ -116,7 +117,6 @@ export default function QuantTerminal() {
             winRate: total > 0 ? (wins / total) * 100 : 0
           });
         }
-
       } catch (err) {
         console.error("Telemetry error:", err);
       } finally {
@@ -144,7 +144,7 @@ export default function QuantTerminal() {
     if (!adminKey) return; 
 
     try {
-      const res = await fetch("https://nexus-backend-production.up.railway.app/api/kill-switch", {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/kill-switch", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
         body: JSON.stringify({ action: currentAction })
@@ -156,16 +156,14 @@ export default function QuantTerminal() {
     }
   };
 
-  // 5. Reactive Math Execution (No button required)
+  // 5. Reactive Math Execution (Calculator Tab)
   const equityNum = parseFloat(calcEquity) || 0;
   const riskPctNum = parseFloat(calcRiskPct) || 0;
   const entryNum = parseFloat(calcEntry) || 0;
   const slNum = parseFloat(calcSL) || 0;
-
   const riskAmount = equityNum * (riskPctNum / 100);
   const slDistance = Math.abs(entryNum - slNum);
   const pipValuePerLot = 100; // Standard XAUUSD Contract
-
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
   // 6. Manual Trade Resolution (Optimistic UI Update)
@@ -178,19 +176,28 @@ export default function QuantTerminal() {
     }
   };
 
+  // Helper function to calculate lot sizes for the queue UI dynamically
+  const calculateSignalLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
+    if (!zoneLow || !zoneHigh || !sl) return 0;
+    const midZone = (zoneLow + zoneHigh) / 2;
+    const distance = Math.abs(midZone - sl);
+    if (distance === 0) return 0;
+    return (equity * riskPct) / (distance * 100); // Assumes XAUUSD
+  };
+
   return (
     <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono">
       
       {/* GLOBAL TOP STATUS BAR */}
-      <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0">
+      <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0 shadow-sm">
         <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse"}`} />
-          <h1 className="text-sm font-bold tracking-widest uppercase">
+          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"}`} />
+          <h1 className="text-sm font-bold tracking-widest uppercase text-primary">
             {config.system_is_killed ? "SYSTEM HALTED" : "NEXUS LIVE"}
           </h1>
         </div>
         {/* LIVE CLOCK */}
-        <div className="text-sm font-bold text-muted-foreground">
+        <div className="text-sm font-bold text-muted-foreground bg-secondary/50 px-3 py-1 rounded-md border border-border/50">
           {currentTime ? currentTime.toLocaleTimeString('en-SG', { hour12: false }) : "--:--:--"}
         </div>
       </header>
@@ -202,65 +209,113 @@ export default function QuantTerminal() {
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             
-            {/* UPGRADED 2x2 ANALYTICS DASHBOARD */}
+            {/* 2x2 ANALYTICS DASHBOARD */}
             <div className="grid grid-cols-2 gap-2">
-              <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
                 <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
                 <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Wins</span>
                 <span className="text-lg font-bold text-foreground">{analytics.totalWins}</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
-                <span className="text-lg font-bold text-foreground">{analytics.totalLosses}</span>
+                <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
               </div>
             </div>
 
-            {/* INTERACTIVE QUEUE */}
+            {/* INTERACTIVE SIGNAL QUEUE */}
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
-              <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-3 uppercase tracking-wider">Execution Queue</h3>
-              <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
+              <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-3">
+                <Target size={14} className="text-primary" />
+                <h3 className="text-xs text-muted-foreground uppercase tracking-wider">Execution Queue</h3>
+              </div>
+              
+              <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
                 {loading ? (
-                  <div className="text-xs text-muted-foreground text-center py-4">Syncing Ledger...</div>
+                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Ledger...</div>
                 ) : queue.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-4">Queue clear.</div>
+                  <div className="text-xs text-muted-foreground text-center py-6">Queue clear. No pending setups.</div>
                 ) : (
-                  queue.map((item) => (
-                    <div key={item.id} className="p-3 bg-background border border-border/40 rounded-lg text-xs shadow-sm flex flex-col gap-2">
-                      <div className="flex justify-between items-center">
-                        <span className={`font-bold text-sm ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>
-                          {item.action} {item.ticker}
-                        </span>
-                        <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
-                      </div>
-                      
-                      {/* Conditional Action Buttons */}
-                      {item.status === "PENDING" ? (
-                        <div className="grid grid-cols-4 gap-1 mt-1">
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-7 text-[10px] bg-emerald-500/20 text-emerald-500 hover:bg-emerald-500/30 font-bold">WIN</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-7 text-[10px] bg-rose-500/20 text-rose-500 hover:bg-rose-500/30 font-bold">LOSS</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-7 text-[10px] bg-zinc-500/20 text-zinc-400 hover:bg-zinc-500/30 font-bold">BE</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-7 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className={`uppercase text-[10px] px-2 py-1 rounded font-bold ${
-                            item.status === "WIN" ? "bg-emerald-500/10 text-emerald-500" :
-                            item.status === "LOSS" ? "bg-rose-500/10 text-rose-500" :
-                            "bg-secondary/50 text-muted-foreground"
-                          }`}>
-                            {item.status}
+                  queue.map((item) => {
+                    const isPending = item.status === "PENDING";
+                    // Calculate lots dynamically based on live equity
+                    const lotT1 = calculateSignalLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
+                    const lotT2 = calculateSignalLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
+                    const lotT3 = calculateSignalLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
+
+                    return (
+                      <div key={item.id} className={`p-3 border rounded-lg text-xs shadow-sm flex flex-col gap-3 transition-colors ${isPending ? "bg-zinc-950 border-primary/30" : "bg-background border-border/40 opacity-75"}`}>
+                        
+                        {/* Header */}
+                        <div className="flex justify-between items-center">
+                          <span className={`font-bold text-sm ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>
+                            {item.action} {item.ticker}
                           </span>
+                          <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
                         </div>
-                      )}
-                    </div>
-                  ))
+
+                        {/* SIGNAL METRICS CARD (Only shows if Pending and data exists) */}
+                        {isPending && item.zone_low && (
+                          <div className="bg-background/50 p-3 rounded-md border border-border/30 flex flex-col gap-2">
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Entry Zone</span>
+                              <span className="font-bold">{item.zone_low.toFixed(2)} - {item.zone_high?.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Stop Loss</span>
+                              <span className="font-bold text-rose-400">{item.stop_loss?.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Take Profit</span>
+                              <span className="font-bold text-emerald-400">{item.take_profit?.toFixed(2)}</span>
+                            </div>
+                            
+                            {/* Lot Sizes */}
+                            <div className="pt-2 grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T1 (2%)</div>
+                                <div className="font-bold text-primary">{lotT1.toFixed(2)}</div>
+                              </div>
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T2 (4%)</div>
+                                <div className="font-bold text-primary">{lotT2.toFixed(2)}</div>
+                              </div>
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T3 (6%)</div>
+                                <div className="font-bold text-primary">{lotT3.toFixed(2)}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Conditional Action Buttons */}
+                        {isPending ? (
+                          <div className="grid grid-cols-4 gap-1.5 mt-1">
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">WIN</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-8 text-[10px] bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 font-bold border border-rose-500/20">LOSS</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-8 text-[10px] bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 font-bold border border-zinc-500/20">BE</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-8 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`uppercase text-[10px] px-2 py-1 rounded font-bold ${
+                              item.status === "WIN" ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" :
+                              item.status === "LOSS" ? "bg-rose-500/10 text-rose-500 border border-rose-500/20" :
+                              "bg-secondary/50 text-muted-foreground border border-border/50"
+                            }`}>
+                              {item.status}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
