@@ -38,8 +38,8 @@ function EconomicCalendarWidget() {
       width: "100%",
       height: "100%",
       locale: "en",
-      importanceFilter: "-1,0,1", // Shows all impacts (Low, Medium, High)
-      currencyFilter: "USD,EUR,GBP,JPY,AUD,CAD,CHF" // Major pairs that impact XAUUSD liquidity
+      importanceFilter: "-1,0,1", 
+      currencyFilter: "USD,EUR,GBP,JPY,AUD,CAD,CHF" 
     });
     container.current.appendChild(script);
   }, []);
@@ -55,19 +55,21 @@ function EconomicCalendarWidget() {
 // MAIN APP ARCHITECTURE
 // ============================================================================
 export default function QuantTerminal() {
+  // Navigation State
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS">("TERMINAL");
+  
+  // Backend States
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 800.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Calculator State
-  const [calcEquity, setCalcEquity] = useState<number>(800);
-  const [calcRiskPct, setCalcRiskPct] = useState<number>(2);
-  const [calcEntry, setCalcEntry] = useState<number>(2350.00);
-  const [calcSL, setCalcSL] = useState<number>(2345.00);
-  const [calcLotSize, setCalcLotSize] = useState<number>(0);
-  const [calcRiskAmount, setCalcRiskAmount] = useState<number>(0);
+  // Calculator States (Using strings to allow typing decimals smoothly)
+  const [calcEquity, setCalcEquity] = useState<string>("800");
+  const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
+  const [calcEntry, setCalcEntry] = useState<string>("2350.00");
+  const [calcSL, setCalcSL] = useState<string>("2345.00");
 
+  // 1. Telemetry Polling
   useEffect(() => {
     async function fetchDashboardData() {
       try {
@@ -78,7 +80,6 @@ export default function QuantTerminal() {
 
         if (!configError && configData) {
           setConfig(configData);
-          if (calcEquity === 800) setCalcEquity(configData.total_equity);
         }
 
         const { data: queueData, error: queueError } = await supabase
@@ -98,6 +99,14 @@ export default function QuantTerminal() {
     return () => clearInterval(interval);
   }, []);
 
+  // 2. Auto-sync Calculator Equity with Live Database Equity
+  useEffect(() => {
+    if (config.total_equity) {
+      setCalcEquity(config.total_equity.toString());
+    }
+  }, [config.total_equity]);
+
+  // 3. Admin Kill Switch Execution
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
@@ -117,18 +126,17 @@ export default function QuantTerminal() {
     }
   };
 
-  const handleCalculate = () => {
-    const riskAmount = calcEquity * (calcRiskPct / 100);
-    const slDistance = Math.abs(calcEntry - calcSL);
-    const pipValuePerLot = 100;
-    
-    let lotSize = 0;
-    if (slDistance > 0) {
-      lotSize = riskAmount / (slDistance * pipValuePerLot);
-    }
-    setCalcRiskAmount(riskAmount);
-    setCalcLotSize(lotSize);
-  };
+  // 4. Reactive Math Execution (No button required)
+  const equityNum = parseFloat(calcEquity) || 0;
+  const riskPctNum = parseFloat(calcRiskPct) || 0;
+  const entryNum = parseFloat(calcEntry) || 0;
+  const slNum = parseFloat(calcSL) || 0;
+
+  const riskAmount = equityNum * (riskPctNum / 100);
+  const slDistance = Math.abs(entryNum - slNum);
+  const pipValuePerLot = 100; // Standard XAUUSD Contract
+
+  const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
   return (
     <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono">
@@ -181,47 +189,73 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* PAGE 2: RISK CALCULATOR */}
+        {/* PAGE 2: REACTIVE RISK CALCULATOR */}
         {activeTab === "CALCULATOR" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
-            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3">XAUUSD Position Sizer</h3>
+            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3 font-mono">XAUUSD Position Sizer</h3>
             
-            <div className="space-y-5 text-sm">
+            <div className="space-y-5 text-sm font-mono">
               <div className="flex flex-col gap-1.5">
                 <label className="text-muted-foreground font-semibold">Account Equity ($)</label>
-                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                <input 
+                  type="number" 
+                  value={calcEquity} 
+                  onChange={(e) => setCalcEquity(e.target.value)} 
+                  className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" 
+                />
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-muted-foreground font-semibold">Risk Percentage (%)</label>
-                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                <input 
+                  type="number" 
+                  step="0.1" 
+                  value={calcRiskPct} 
+                  onChange={(e) => setCalcRiskPct(e.target.value)} 
+                  className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" 
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-muted-foreground font-semibold">Entry Price</label>
-                  <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={calcEntry} 
+                    onChange={(e) => setCalcEntry(e.target.value)} 
+                    className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" 
+                  />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="text-muted-foreground font-semibold">Stop Loss</label>
-                  <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={calcSL} 
+                    onChange={(e) => setCalcSL(e.target.value)} 
+                    className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" 
+                  />
                 </div>
               </div>
 
-              <Button onClick={handleCalculate} size="lg" className="w-full mt-2 font-bold tracking-widest uppercase">Calculate Lot Size</Button>
-              
-              {calcLotSize > 0 && (
+              {/* REACTIVE OUTPUT WINDOW */}
+              {lotSize > 0 ? (
                 <div className="mt-6 p-5 bg-background border border-border/50 rounded-xl space-y-3 shadow-inner">
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground text-xs uppercase tracking-wider">Capital at Risk</span>
-                    <span className="font-bold text-destructive">${calcRiskAmount.toFixed(2)}</span>
+                    <span className="font-bold text-destructive">${riskAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground text-xs uppercase tracking-wider">SL Distance</span>
-                    <span className="font-bold">{Math.abs(calcEntry - calcSL).toFixed(2)} pts</span>
+                    <span className="font-bold">{slDistance.toFixed(2)} pts</span>
                   </div>
                   <div className="flex justify-between items-center border-t border-border/50 pt-3 mt-3">
                     <span className="text-muted-foreground font-bold uppercase tracking-wider">Execute Size</span>
-                    <span className="font-bold text-emerald-500 text-2xl">{calcLotSize.toFixed(2)}</span>
+                    <span className="font-bold text-emerald-500 text-2xl">{lotSize.toFixed(2)} Lots</span>
                   </div>
+                </div>
+              ) : (
+                <div className="text-center text-xs text-muted-foreground bg-background p-4 border border-dashed border-border/50 rounded-xl mt-4">
+                  Enter valid Entry and Stop Loss metrics to calculate size.
                 </div>
               )}
             </div>
