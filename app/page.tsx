@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert } from "lucide-react"; // Native App Icons
+import { Activity, Calculator, ShieldAlert } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -20,30 +20,27 @@ interface QueueItem {
 }
 
 // ============================================================================
-// WIDGET: TRADINGVIEW ADVANCED CHART
+// WIDGET: MACROECONOMIC NEWS & TIMELINE
 // ============================================================================
-function TradingViewChart() {
+function MacroNewsWidget() {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!container.current) return;
     container.current.innerHTML = "";
     const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-timeline.js";
     script.type = "text/javascript";
     script.async = true;
     script.innerHTML = JSON.stringify({
-      autosize: true,
-      symbol: "OANDA:XAUUSD",
-      interval: "15",
-      timezone: "Asia/Singapore",
-      theme: "dark",
-      style: "1",
-      locale: "en",
-      enable_publishing: false,
-      hide_side_toolbar: false,
-      allow_symbol_change: true,
-      support_host: "https://www.tradingview.com"
+      feedMode: "market",
+      market: "forex", // Filters for currency and commodity-impacting news
+      isTransparent: true,
+      displayMode: "regular",
+      width: "100%",
+      height: "100%",
+      colorTheme: "dark",
+      locale: "en"
     });
     container.current.appendChild(script);
   }, []);
@@ -134,11 +131,10 @@ export default function QuantTerminal() {
     setCalcLotSize(lotSize);
   };
 
-  // Note the h-[100dvh] - This accounts for mobile browser URL bars hiding/showing dynamically
   return (
     <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono">
       
-      {/* GLOBAL TOP STATUS BAR (Minimal for Mobile) */}
+      {/* GLOBAL TOP STATUS BAR */}
       <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0">
         <div className="flex items-center gap-2">
           <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse"}`} />
@@ -152,16 +148,12 @@ export default function QuantTerminal() {
       {/* SCROLLABLE MAIN CONTENT CANVAS */}
       <main className="flex-1 overflow-y-auto p-4 pb-24">
         
-        {/* PAGE 1: TERMINAL (Chart + Queue) */}
+        {/* PAGE 1: TERMINAL (News + Queue) */}
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
-            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md">
-              <TradingViewChart />
-            </div>
-            
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
               <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-3 uppercase tracking-wider">Execution Queue</h3>
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
                 {loading ? (
                   <div className="text-xs text-muted-foreground text-center py-4">Syncing...</div>
                 ) : queue.length === 0 ? (
@@ -182,6 +174,10 @@ export default function QuantTerminal() {
                   ))
                 )}
               </div>
+            </div>
+
+            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md">
+              <MacroNewsWidget />
             </div>
           </div>
         )}
@@ -260,7 +256,7 @@ export default function QuantTerminal() {
         )}
       </main>
 
-      {/* FIXED BOTTOM NAVIGATION BAR (The Native App Feel) */}
+      {/* FIXED BOTTOM NAVIGATION BAR */}
       <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0">
         <div className="flex justify-around items-center h-16 max-w-md mx-auto px-4">
           <button 
