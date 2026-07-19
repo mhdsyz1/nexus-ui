@@ -24,7 +24,7 @@ interface QueueItem {
 }
 
 // ============================================================================
-// WIDGET: ECONOMIC CALENDAR 
+// WIDGET: ECONOMIC CALENDAR (FOREX FACTORY STYLE)
 // ============================================================================
 function EconomicCalendarWidget() {
   const container = useRef<HTMLDivElement>(null);
@@ -59,52 +59,58 @@ function EconomicCalendarWidget() {
 // MAIN APP ARCHITECTURE
 // ============================================================================
 export default function QuantTerminal() {
+  // Navigation State
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL">("TERMINAL");
   
+  // Backend & Analytics States
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 800.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0 });
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
+  // Calculator States 
   const [calcEquity, setCalcEquity] = useState<string>("800");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
   const [calcEntry, setCalcEntry] = useState<string>("2350.00");
   const [calcSL, setCalcSL] = useState<string>("2345.00");
 
+  // Journaling States
   const [pendingJournalTradeId, setPendingJournalTradeId] = useState<string | null>(null);
   const [journalText, setJournalText] = useState("");
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
 
+  // 1. Live Clock Sync
   useEffect(() => {
     setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // 2. Telemetry & Analytics Polling
   useEffect(() => {
     async function fetchDashboardData() {
       try {
-        const { data: configData } = await supabase
+        const { data: configData, error: configError } = await supabase
           .from("risk_configuration")
           .select("total_equity, max_allowed_layers, system_is_killed")
           .order("id", { ascending: false }).limit(1).single();
 
-        if (configData) setConfig(configData);
+        if (!configError && configData) setConfig(configData);
 
-        const { data: queueData } = await supabase
+        const { data: queueData, error: queueError } = await supabase
           .from("execution_queue")
           .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit")
-          .order("created_at", { ascending: false }).limit(5); 
+          .order("created_at", { ascending: false }).limit(5);
 
-        if (queueData) setQueue(queueData);
+        if (!queueError && queueData) setQueue(queueData);
 
-        const { data: statsData } = await supabase
+        const { data: statsData, error: statsError } = await supabase
           .from("execution_queue")
           .select("status")
           .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
 
-        if (statsData) {
+        if (!statsError && statsData) {
           const wins = statsData.filter(t => t.status === "WIN").length;
           const losses = statsData.filter(t => t.status === "LOSS").length;
           const total = statsData.length;
@@ -115,6 +121,7 @@ export default function QuantTerminal() {
           });
         }
         
+        // Fetch Journal History
         if (activeTab === "JOURNAL") {
             const { data: jData } = await supabase
                 .from("trade_journal")
@@ -136,10 +143,12 @@ export default function QuantTerminal() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
+  // 3. Auto-sync Calculator Equity
   useEffect(() => {
     if (config.total_equity) setCalcEquity(config.total_equity.toString());
   }, [config.total_equity]);
 
+  // 4. Admin Kill Switch Execution
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
@@ -159,6 +168,7 @@ export default function QuantTerminal() {
     }
   };
 
+  // 5. Reactive Math Execution
   const equityNum = parseFloat(calcEquity) || 0;
   const riskPctNum = parseFloat(calcRiskPct) || 0;
   const entryNum = parseFloat(calcEntry) || 0;
@@ -168,6 +178,7 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
+  // 6. Manual Trade Resolution & Trigger Journal Modal
   const resolveTrade = async (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     try {
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
@@ -176,20 +187,23 @@ export default function QuantTerminal() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          secret_token: "YOUR_WEBHOOK_SECRET", 
+          secret_token: "YOUR_WEBHOOK_SECRET", // <-- REPLACE THIS IN PROD
           trade_id: id, 
           outcome: outcome 
         })
       });
 
+      // Instantly trigger the context journaling engine if executed
       if (outcome === "WIN" || outcome === "LOSS" || outcome === "BREAKEVEN") {
           setPendingJournalTradeId(id);
       }
+      
     } catch (err) {
       console.error("Failed to update trade outcome:", err);
     }
   };
 
+  // 7. Push Journal Entry to Supabase
   const submitJournal = async () => {
     if (!pendingJournalTradeId || !journalText.trim()) return;
     try {
@@ -289,17 +303,9 @@ export default function QuantTerminal() {
                 ) : (
                   queue.map((item) => {
                     const isPending = item.status === "PENDING";
-                    
                     const lotT1 = calculateSignalLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
                     const lotT2 = calculateSignalLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
                     const lotT3 = calculateSignalLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
-
-                    // Dynamic TP Interpolation
-                    const isBuy = item.action === "BUY";
-                    const entryMid = (item.zone_low && item.zone_high) ? (item.zone_low + item.zone_high) / 2 : 0;
-                    const slDist = Math.abs(entryMid - (item.stop_loss || 0));
-                    const tp1 = isBuy ? entryMid + slDist : entryMid - slDist;
-                    const tp2 = isBuy ? entryMid + (slDist * 2) : entryMid - (slDist * 2);
 
                     return (
                       <div key={item.id} className={`p-3 border rounded-lg text-xs shadow-sm flex flex-col gap-3 transition-colors ${isPending ? "bg-zinc-950 border-primary/30" : "bg-background border-border/40 opacity-75"}`}>
@@ -310,7 +316,6 @@ export default function QuantTerminal() {
                           <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
                         </div>
 
-                        {/* UPGRADED DATA BLOCK */}
                         {isPending && item.zone_low && (
                           <div className="bg-background/50 p-3 rounded-md border border-border/30 flex flex-col gap-2">
                             <div className="flex justify-between items-center border-b border-border/30 pb-1">
@@ -321,29 +326,28 @@ export default function QuantTerminal() {
                               <span className="text-muted-foreground text-[10px] uppercase">Stop Loss</span>
                               <span className="font-bold text-rose-400">{item.stop_loss?.toFixed(2)}</span>
                             </div>
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Take Profit</span>
+                              <span className="font-bold text-emerald-400">{item.take_profit?.toFixed(2)}</span>
+                            </div>
                             
-                            {/* DYNAMIC TP TIERS & LOTS */}
                             <div className="pt-2 grid grid-cols-3 gap-2 text-center">
-                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-border/50">
-                                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">TP1 (1R)</div>
-                                <div className="font-bold text-emerald-400 text-xs">{tp1.toFixed(2)}</div>
-                                <div className="text-[9px] font-bold text-primary mt-1">{lotT1.toFixed(2)} Lots</div>
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T1 (2%)</div>
+                                <div className="font-bold text-primary">{lotT1.toFixed(2)}</div>
                               </div>
-                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-border/50">
-                                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">TP2 (2R)</div>
-                                <div className="font-bold text-emerald-400 text-xs">{tp2.toFixed(2)}</div>
-                                <div className="text-[9px] font-bold text-primary mt-1">{lotT2.toFixed(2)} Lots</div>
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T2 (4%)</div>
+                                <div className="font-bold text-primary">{lotT2.toFixed(2)}</div>
                               </div>
-                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-primary/20 shadow-[0_0_8px_rgba(59,130,246,0.1)]">
-                                <div className="text-[9px] text-primary font-bold uppercase tracking-wider">TP3 (MAX)</div>
-                                <div className="font-bold text-emerald-400 text-xs">{item.take_profit?.toFixed(2)}</div>
-                                <div className="text-[9px] font-bold text-primary mt-1">{lotT3.toFixed(2)} Lots</div>
+                              <div className="bg-zinc-900 rounded p-1">
+                                <div className="text-[9px] text-muted-foreground mb-0.5">T3 (6%)</div>
+                                <div className="font-bold text-primary">{lotT3.toFixed(2)}</div>
                               </div>
                             </div>
                           </div>
                         )}
                         
-                        {/* CONDITIONAL BUTTONS */}
                         {isPending ? (
                           <div className="grid grid-cols-4 gap-1.5 mt-1">
                             <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">WIN</Button>
