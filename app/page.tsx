@@ -144,7 +144,7 @@ export default function QuantTerminal() {
         {/* MIDDLE COLUMN: LIVE CHART INJECTION ZONE */}
         <div className="col-span-6 p-4 border border-border/50 rounded-lg bg-card flex flex-col">
           <h3 className="text-sm text-muted-foreground border-b border-border/50 pb-2 mb-2 font-sans uppercase">Live Charting (XAUUSD)</h3>
-          <div className="flex-1 border border-border/20 rounded bg-zinc-950 overflow-hidden min-h-[450px]">
+          <div className="flex-1 border border-border/20 rounded bg-zinc-950 overflow-hidden min-h-112.5">
             <TradingViewChart />
           </div>
         </div>
