@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, CheckCircle2 } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -95,7 +95,7 @@ export default function QuantTerminal() {
         const { data: queueData } = await supabase
           .from("execution_queue")
           .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit")
-          .order("created_at", { ascending: false }).limit(10); // Pulled 10 to show history
+          .order("created_at", { ascending: false }).limit(5); 
 
         if (queueData) setQueue(queueData);
 
@@ -123,6 +123,7 @@ export default function QuantTerminal() {
                 .limit(10);
             if (jData) setJournalHistory(jData);
         }
+
       } catch (err) {
         console.error("Telemetry error:", err);
       } finally {
@@ -203,7 +204,7 @@ export default function QuantTerminal() {
     }
   };
 
-  const calculateLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
+  const calculateSignalLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
     if (!zoneLow || !zoneHigh || !sl) return 0;
     const midZone = (zoneLow + zoneHigh) / 2;
     const distance = Math.abs(midZone - sl);
@@ -211,141 +212,156 @@ export default function QuantTerminal() {
     return (equity * riskPct) / (distance * 100); 
   };
 
-  const pendingQueue = queue.filter(q => q.status === "PENDING");
-  const closedQueue = queue.filter(q => q.status !== "PENDING").slice(0, 5); // Show last 5
-
   return (
-    <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono relative selection:bg-primary/20">
+    <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono relative">
       
       {/* MODAL OVERLAY: FORCED CONTEXT JOURNALING */}
       {pendingJournalTradeId && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/95 p-4 backdrop-blur-md">
-            <div className="bg-[#13151A] border border-border/20 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col gap-4">
-                <div className="border-b border-border/20 pb-4">
-                    <h3 className="text-lg font-bold text-white tracking-wider uppercase">Trade Journal</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Contextualize this execution.</p>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
+            <div className="bg-zinc-950 border border-border/50 rounded-xl p-5 w-full max-w-md shadow-2xl flex flex-col gap-4">
+                <div className="border-b border-border/50 pb-3">
+                    <h3 className="text-lg font-bold text-primary tracking-wider uppercase">Log Trade Context</h3>
+                    <p className="text-xs text-muted-foreground mt-1">Why did you execute this specific setup?</p>
                 </div>
                 <textarea 
-                    className="w-full h-32 p-4 bg-[#1C1E26] border border-border/10 rounded-xl focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
+                    className="w-full h-32 p-3 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
                     placeholder="e.g., M5 orderblock tap aligned with H1 bullish trend. Clean price action rejection."
                     value={journalText}
                     onChange={(e) => setJournalText(e.target.value)}
                 />
-                <div className="flex gap-3 pt-3">
-                    <Button variant="ghost" className="flex-1 bg-zinc-900/50 hover:bg-zinc-800 text-muted-foreground text-xs font-bold" onClick={() => setPendingJournalTradeId(null)}>SKIP</Button>
-                    <Button className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 hover:opacity-90 text-white text-xs font-bold shadow-lg" onClick={submitJournal}>SAVE LOG</Button>
+                <div className="flex gap-2 pt-2">
+                    <Button variant="ghost" className="flex-1 border border-border/50 text-xs tracking-wider" onClick={() => setPendingJournalTradeId(null)}>SKIP</Button>
+                    <Button className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold tracking-wider" onClick={submitJournal}>SAVE ENTRY</Button>
                 </div>
             </div>
         </div>
       )}
 
       {/* GLOBAL TOP STATUS BAR */}
-      <header className="flex justify-between items-center p-4 border-b border-white/5 bg-[#13151A] shrink-0">
-        <div className="flex items-center gap-3">
-          <span className={`h-2 w-2 rounded-full ${config.system_is_killed ? "bg-red-500" : "bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.5)]"}`} />
-          <h1 className="text-sm font-bold tracking-widest uppercase text-white">
+      <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0 shadow-sm">
+        <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"}`} />
+          <h1 className="text-sm font-bold tracking-widest uppercase text-primary">
             {config.system_is_killed ? "SYSTEM HALTED" : "NEXUS LIVE"}
           </h1>
         </div>
-        <div className="text-xs font-medium text-muted-foreground">
+        <div className="text-sm font-bold text-muted-foreground bg-secondary/50 px-3 py-1 rounded-md border border-border/50">
           {currentTime ? currentTime.toLocaleTimeString('en-SG', { hour12: false }) : "--:--:--"}
         </div>
       </header>
 
       {/* SCROLLABLE MAIN CONTENT CANVAS */}
-      <main className="flex-1 overflow-y-auto p-4 pb-24 bg-[#090A0F]">
+      <main className="flex-1 overflow-y-auto p-4 pb-24">
         
+        {/* PAGE 1: TERMINAL */}
         {activeTab === "TERMINAL" && (
-          <div className="flex flex-col gap-6 h-full">
-            
-            {/* ACTIVE SIGNALS */}
-            <div>
-              <div className="flex items-center gap-2 mb-4 pl-1">
-                <Target size={14} className="text-blue-400" />
-                <h3 className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Active Signals</h3>
+          <div className="flex flex-col gap-4 h-full">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
+                <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
+              </div>
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
+                <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
+              </div>
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Wins</span>
+                <span className="text-lg font-bold text-foreground">{analytics.totalWins}</span>
+              </div>
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
+                <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
+              </div>
+            </div>
+
+            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
+              <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-3">
+                <Target size={14} className="text-primary" />
+                <h3 className="text-xs text-muted-foreground uppercase tracking-wider">Execution Queue</h3>
               </div>
               
-              <div className="space-y-4">
+              <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
                 {loading ? (
-                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Telemetry...</div>
-                ) : pendingQueue.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-8 bg-[#13151A] border border-white/5 rounded-2xl">No pending setups. Awaiting injection.</div>
+                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Ledger...</div>
+                ) : queue.length === 0 ? (
+                  <div className="text-xs text-muted-foreground text-center py-6">Queue clear. No pending setups.</div>
                 ) : (
-                  pendingQueue.map((item) => {
-                    const isBuy = item.action === "BUY";
-                    const badgeColor = isBuy ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-rose-500/10 text-rose-400 border-rose-500/20";
+                  queue.map((item) => {
+                    const isPending = item.status === "PENDING";
                     
-                    const lotT1 = calculateLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
-                    const lotT2 = calculateLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
-                    const lotT3 = calculateLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
+                    const lotT1 = calculateSignalLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
+                    const lotT2 = calculateSignalLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
+                    const lotT3 = calculateSignalLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
 
                     // Dynamic TP Interpolation
+                    const isBuy = item.action === "BUY";
                     const entryMid = (item.zone_low && item.zone_high) ? (item.zone_low + item.zone_high) / 2 : 0;
                     const slDist = Math.abs(entryMid - (item.stop_loss || 0));
                     const tp1 = isBuy ? entryMid + slDist : entryMid - slDist;
                     const tp2 = isBuy ? entryMid + (slDist * 2) : entryMid - (slDist * 2);
 
                     return (
-                      <div key={item.id} className="bg-[#13151A] border border-white/5 rounded-2xl p-5 shadow-xl flex flex-col gap-4 relative overflow-hidden">
-                        
-                        {/* AESTHETIC HEADER */}
+                      <div key={item.id} className={`p-3 border rounded-lg text-xs shadow-sm flex flex-col gap-3 transition-colors ${isPending ? "bg-zinc-950 border-primary/30" : "bg-background border-border/40 opacity-75"}`}>
                         <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-3">
-                            <h2 className="text-xl font-black text-white tracking-tight">{item.ticker}</h2>
-                            <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${badgeColor}`}>
-                              {item.action}
-                            </span>
-                          </div>
+                          <span className={`font-bold text-sm ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>
+                            {item.action} {item.ticker}
+                          </span>
                           <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
                         </div>
 
-                        {/* METRICS GRID (Vexaflow Style) */}
-                        {item.zone_low && (
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="col-span-2 bg-[#1C1E26] p-4 rounded-xl border border-white/5">
-                              <div className="text-[9px] text-muted-foreground font-bold uppercase tracking-widest mb-1.5">Entry Zone</div>
-                              <div className="text-lg font-mono font-medium text-white">{item.zone_low.toFixed(2)} <span className="text-muted-foreground/50 mx-1">-</span> {item.zone_high?.toFixed(2)}</div>
+                        {/* UPGRADED DATA BLOCK */}
+                        {isPending && item.zone_low && (
+                          <div className="bg-background/50 p-3 rounded-md border border-border/30 flex flex-col gap-2">
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Entry Zone</span>
+                              <span className="font-bold">{item.zone_low.toFixed(2)} - {item.zone_high?.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
+                              <span className="text-muted-foreground text-[10px] uppercase">Stop Loss</span>
+                              <span className="font-bold text-rose-400">{item.stop_loss?.toFixed(2)}</span>
                             </div>
                             
-                            <div className="bg-[#1C1E26] p-3 rounded-xl border border-white/5">
-                              <div className="text-[9px] text-muted-foreground font-bold uppercase tracking-widest mb-1.5">SL</div>
-                              <div className="text-md font-mono font-medium text-rose-400">{item.stop_loss?.toFixed(2)}</div>
-                            </div>
-
-                            <div className="bg-[#1C1E26] p-3 rounded-xl border border-white/5">
-                              <div className="flex justify-between items-end mb-1.5">
-                                <span className="text-[9px] text-muted-foreground font-bold uppercase tracking-widest">TP 1</span>
-                                <span className="text-[8px] text-emerald-400 font-bold">{lotT1.toFixed(2)} L</span>
+                            {/* DYNAMIC TP TIERS & LOTS */}
+                            <div className="pt-2 grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-border/50">
+                                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">TP1 (1R)</div>
+                                <div className="font-bold text-emerald-400 text-xs">{tp1.toFixed(2)}</div>
+                                <div className="text-[9px] font-bold text-primary mt-1">{lotT1.toFixed(2)} Lots</div>
                               </div>
-                              <div className="text-md font-mono font-medium text-emerald-400">{tp1.toFixed(2)}</div>
-                            </div>
-
-                            <div className="bg-[#1C1E26] p-3 rounded-xl border border-white/5">
-                               <div className="flex justify-between items-end mb-1.5">
-                                <span className="text-[9px] text-muted-foreground font-bold uppercase tracking-widest">TP 2</span>
-                                <span className="text-[8px] text-emerald-400 font-bold">{lotT2.toFixed(2)} L</span>
+                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-border/50">
+                                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">TP2 (2R)</div>
+                                <div className="font-bold text-emerald-400 text-xs">{tp2.toFixed(2)}</div>
+                                <div className="text-[9px] font-bold text-primary mt-1">{lotT2.toFixed(2)} Lots</div>
                               </div>
-                              <div className="text-md font-mono font-medium text-emerald-400">{tp2.toFixed(2)}</div>
-                            </div>
-
-                            <div className="bg-[#1C1E26] p-3 rounded-xl border border-white/5 relative overflow-hidden">
-                               <div className="absolute top-0 right-0 w-8 h-8 bg-blue-500/10 rounded-bl-full blur-md" />
-                               <div className="flex justify-between items-end mb-1.5 relative z-10">
-                                <span className="text-[9px] text-blue-400 font-bold uppercase tracking-widest">TP 3 (FINAL)</span>
-                                <span className="text-[8px] text-blue-400 font-bold">{lotT3.toFixed(2)} L</span>
+                              <div className="bg-zinc-900 rounded p-2 flex flex-col gap-1 border border-primary/20 shadow-[0_0_8px_rgba(59,130,246,0.1)]">
+                                <div className="text-[9px] text-primary font-bold uppercase tracking-wider">TP3 (MAX)</div>
+                                <div className="font-bold text-emerald-400 text-xs">{item.take_profit?.toFixed(2)}</div>
+                                <div className="text-[9px] font-bold text-primary mt-1">{lotT3.toFixed(2)} Lots</div>
                               </div>
-                              <div className="text-md font-mono font-medium text-blue-400 relative z-10">{item.take_profit?.toFixed(2)}</div>
                             </div>
                           </div>
                         )}
                         
-                        {/* RESOLUTION ACTIONS */}
-                        <div className="grid grid-cols-4 gap-2 mt-2">
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-10 text-[10px] bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 font-bold rounded-xl transition-all">WIN</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-10 text-[10px] bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 font-bold rounded-xl transition-all">LOSS</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-10 text-[10px] bg-zinc-800 text-zinc-300 hover:bg-zinc-700 font-bold rounded-xl transition-all">BE</Button>
-                          <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-10 text-[10px] text-muted-foreground hover:text-white font-bold rounded-xl">DROP</Button>
-                        </div>
+                        {/* CONDITIONAL BUTTONS */}
+                        {isPending ? (
+                          <div className="grid grid-cols-4 gap-1.5 mt-1">
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">WIN</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-8 text-[10px] bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 font-bold border border-rose-500/20">LOSS</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-8 text-[10px] bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 font-bold border border-zinc-500/20">BE</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-8 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`uppercase text-[10px] px-2 py-1 rounded font-bold ${
+                              item.status === "WIN" ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" :
+                              item.status === "LOSS" ? "bg-rose-500/10 text-rose-500 border border-rose-500/20" :
+                              "bg-secondary/50 text-muted-foreground border border-border/50"
+                            }`}>
+                              {item.status}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -353,53 +369,19 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            {/* RECENTLY CLOSED */}
-            <div className="mt-4 border-t border-white/5 pt-6">
-              <div className="flex items-center gap-2 mb-4 pl-1">
-                <CheckCircle2 size={14} className="text-muted-foreground" />
-                <h3 className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Recently Closed</h3>
-              </div>
-
-              <div className="space-y-3">
-                {closedQueue.length === 0 ? (
-                    <div className="text-[10px] text-muted-foreground/50 pl-1">No execution history found.</div>
-                ) : (
-                    closedQueue.map((item) => {
-                        const statusColor = 
-                            item.status === "WIN" ? "text-emerald-400 border-emerald-500/20 bg-emerald-500/5" :
-                            item.status === "LOSS" ? "text-rose-400 border-rose-500/20 bg-rose-500/5" :
-                            "text-zinc-400 border-white/5 bg-[#1C1E26]";
-                            
-                        return (
-                            <div key={item.id} className={`p-4 rounded-xl border ${statusColor} flex justify-between items-center`}>
-                                <div>
-                                    <h4 className="text-sm font-bold text-white">{item.ticker}</h4>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <span className={`text-[9px] font-bold ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>{item.action}</span>
-                                        <span className="text-[9px] text-muted-foreground">{new Date(item.created_at).toLocaleDateString()}</span>
-                                    </div>
-                                </div>
-                                <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider ${statusColor.replace('bg-', 'bg-opacity-100 bg-')}`}>
-                                    {item.status}
-                                </div>
-                            </div>
-                        )
-                    })
-                )}
-              </div>
+            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md min-h-[300px]">
+              <EconomicCalendarWidget />
             </div>
-
-            <div className="h-12" /> {/* Bottom padding buffer */}
           </div>
         )}
 
         {/* PAGE 2: JOURNAL LOGS */}
         {activeTab === "JOURNAL" && (
           <div className="flex flex-col gap-4 h-full">
-            <div className="p-5 border border-white/5 rounded-2xl bg-[#13151A] shadow-xl">
-                <div className="flex items-center gap-2 border-b border-white/5 pb-3 mb-5">
-                    <BookText size={16} className="text-blue-400" />
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Trading Journal Logs</h3>
+            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
+                <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-4">
+                    <BookText size={16} className="text-primary" />
+                    <h3 className="text-xs font-bold text-primary uppercase tracking-wider">Trading Journal Logs</h3>
                 </div>
                 
                 <div className="space-y-4">
@@ -407,12 +389,12 @@ export default function QuantTerminal() {
                         <div className="text-xs text-muted-foreground text-center py-6">No journal entries found. Execute a trade to log context.</div>
                     ) : (
                         journalHistory.map((log) => (
-                            <div key={log.id} className="p-4 bg-[#1C1E26] border border-white/5 rounded-xl flex flex-col gap-2">
-                                <div className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest flex justify-between items-center border-b border-white/5 pb-2">
-                                    <span>Log: {log.id.split("-")[0]}</span>
+                            <div key={log.id} className="p-3 bg-zinc-900/50 border border-border/50 rounded-lg flex flex-col gap-2">
+                                <div className="text-[10px] text-muted-foreground flex justify-between items-center border-b border-border/20 pb-1">
+                                    <span>Log ID: {log.id.split("-")[0]}</span>
                                     <span>{new Date(log.created_at).toLocaleDateString()}</span>
                                 </div>
-                                <p className="text-xs text-zinc-300 mt-2 leading-relaxed">{log.reason_for_entry}</p>
+                                <p className="text-xs text-foreground mt-1 leading-relaxed">{log.reason_for_entry}</p>
                             </div>
                         ))
                     )}
@@ -423,42 +405,46 @@ export default function QuantTerminal() {
 
         {/* PAGE 3: REACTIVE RISK CALCULATOR */}
         {activeTab === "CALCULATOR" && (
-          <div className="w-full max-w-md mx-auto p-6 border border-white/5 rounded-2xl bg-[#13151A] shadow-xl">
-            <h3 className="text-lg font-bold mb-6 text-white border-b border-white/5 pb-4">Manual Sizer</h3>
-            <div className="space-y-5 text-sm">
-              <div className="flex flex-col gap-2">
-                <label className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Account Equity ($)</label>
-                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(e.target.value)} className="w-full text-base p-3 bg-[#1C1E26] border border-white/5 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-white font-mono" />
+          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
+            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3 font-mono">XAUUSD Position Sizer</h3>
+            <div className="space-y-5 text-sm font-mono">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground font-semibold">Account Equity ($)</label>
+                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
               </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Risk (%)</label>
-                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(e.target.value)} className="w-full text-base p-3 bg-[#1C1E26] border border-white/5 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-white font-mono" />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground font-semibold">Risk Percentage (%)</label>
+                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Entry Price</label>
-                  <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(e.target.value)} className="w-full text-base p-3 bg-[#1C1E26] border border-white/5 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-white font-mono" />
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-muted-foreground font-semibold">Entry Price</label>
+                  <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
                 </div>
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs text-muted-foreground font-bold uppercase tracking-widest">Stop Loss</label>
-                  <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(e.target.value)} className="w-full text-base p-3 bg-[#1C1E26] border border-white/5 rounded-xl focus:ring-1 focus:ring-blue-500 outline-none text-white font-mono" />
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-muted-foreground font-semibold">Stop Loss</label>
+                  <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
                 </div>
               </div>
 
-              {lotSize > 0 && (
-                <div className="mt-8 p-5 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 border border-blue-500/20 rounded-xl space-y-4">
+              {lotSize > 0 ? (
+                <div className="mt-6 p-5 bg-background border border-border/50 rounded-xl space-y-3 shadow-inner">
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest">Capital at Risk</span>
-                    <span className="font-mono text-rose-400">${riskAmount.toFixed(2)}</span>
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">Capital at Risk</span>
+                    <span className="font-bold text-destructive">${riskAmount.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest">SL Distance</span>
-                    <span className="font-mono text-white">{slDistance.toFixed(2)} pts</span>
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">SL Distance</span>
+                    <span className="font-bold">{slDistance.toFixed(2)} pts</span>
                   </div>
-                  <div className="flex justify-between items-center border-t border-white/10 pt-4 mt-2">
-                    <span className="text-white font-bold uppercase tracking-widest text-xs">Execute Size</span>
-                    <span className="font-mono text-blue-400 font-black text-2xl">{lotSize.toFixed(2)} L</span>
+                  <div className="flex justify-between items-center border-t border-border/50 pt-3 mt-3">
+                    <span className="text-muted-foreground font-bold uppercase tracking-wider">Execute Size</span>
+                    <span className="font-bold text-emerald-500 text-2xl">{lotSize.toFixed(2)} Lots</span>
                   </div>
+                </div>
+              ) : (
+                <div className="text-center text-xs text-muted-foreground bg-background p-4 border border-dashed border-border/50 rounded-xl mt-4">
+                  Enter valid metrics to calculate size.
                 </div>
               )}
             </div>
@@ -467,17 +453,18 @@ export default function QuantTerminal() {
 
         {/* PAGE 4: ADMIN CONTROLS */}
         {activeTab === "CONTROLS" && (
-          <div className="w-full max-w-md mx-auto p-6 border border-white/5 rounded-2xl bg-[#13151A] shadow-xl flex flex-col gap-6">
+          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-6">
             <div>
-              <h3 className="text-lg font-bold text-white border-b border-white/5 pb-4 mb-3">Admin Overrides</h3>
+              <h3 className="text-lg font-bold text-primary border-b border-border/50 pb-3 mb-2">Admin Overrides</h3>
               <p className="text-xs text-muted-foreground">Require master API key authorization to execute.</p>
             </div>
             
-            <div className="p-5 border border-red-900/30 bg-red-950/10 rounded-xl">
+            <div className="p-4 border border-red-900/30 bg-red-950/10 rounded-xl">
               <Button 
                 onClick={toggleKillSwitch}
                 size="lg"
-                className={`w-full font-bold tracking-widest uppercase rounded-xl transition-all ${config.system_is_killed ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-rose-500 hover:bg-rose-600 text-white"}`}
+                variant={config.system_is_killed ? "default" : "destructive"} 
+                className={`w-full font-bold tracking-wider uppercase transition-colors ${config.system_is_killed ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}`}
               >
                 {config.system_is_killed ? "RESTORE SYSTEM" : "ACTIVATE KILL SWITCH"}
               </Button>
@@ -487,26 +474,26 @@ export default function QuantTerminal() {
       </main>
 
       {/* FIXED BOTTOM NAVIGATION BAR */}
-      <nav className="fixed bottom-0 w-full bg-[#13151A] border-t border-white/5 pb-safe z-40">
+      <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0 z-40">
         <div className="flex justify-around items-center h-16 max-w-md mx-auto px-2">
-          <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-blue-400" : "text-muted-foreground hover:text-white"}`}>
+          <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
             <Activity size={20} strokeWidth={activeTab === "TERMINAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-widest">Terminal</span>
+            <span className="text-[9px] font-bold uppercase tracking-wider">Terminal</span>
           </button>
           
-          <button onClick={() => setActiveTab("JOURNAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "JOURNAL" ? "text-blue-400" : "text-muted-foreground hover:text-white"}`}>
+          <button onClick={() => setActiveTab("JOURNAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "JOURNAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
             <BookText size={20} strokeWidth={activeTab === "JOURNAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-widest">Journal</span>
+            <span className="text-[9px] font-bold uppercase tracking-wider">Journal</span>
           </button>
 
-          <button onClick={() => setActiveTab("CALCULATOR")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CALCULATOR" ? "text-blue-400" : "text-muted-foreground hover:text-white"}`}>
+          <button onClick={() => setActiveTab("CALCULATOR")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CALCULATOR" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
             <Calculator size={20} strokeWidth={activeTab === "CALCULATOR" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-widest">Sizer</span>
+            <span className="text-[9px] font-bold uppercase tracking-wider">Sizer</span>
           </button>
 
-          <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-blue-400" : "text-muted-foreground hover:text-white"}`}>
+          <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
             <ShieldAlert size={20} strokeWidth={activeTab === "CONTROLS" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-widest">Controls</span>
+            <span className="text-[9px] font-bold uppercase tracking-wider">Controls</span>
           </button>
         </div>
       </nav>
