@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
+import { Activity, Calculator, ShieldAlert } from "lucide-react"; // Native App Icons
 
 interface RiskConfig {
   total_equity: number;
@@ -48,25 +49,22 @@ function TradingViewChart() {
   }, []);
 
   return (
-    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-[400px]" ref={container}>
+    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-[350px]" ref={container}>
       <div className="tradingview-widget-container__widget w-full flex-1" />
     </div>
   );
 }
 
 // ============================================================================
-// MAIN TERMINAL APPLICATION
+// MAIN APP ARCHITECTURE
 // ============================================================================
 export default function QuantTerminal() {
-  // Navigation State
-  const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR">("TERMINAL");
-
-  // Backend States
+  const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS">("TERMINAL");
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 800.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Calculator States
+  // Calculator State
   const [calcEquity, setCalcEquity] = useState<number>(800);
   const [calcRiskPct, setCalcRiskPct] = useState<number>(2);
   const [calcEntry, setCalcEntry] = useState<number>(2350.00);
@@ -84,7 +82,7 @@ export default function QuantTerminal() {
 
         if (!configError && configData) {
           setConfig(configData);
-          if (calcEquity === 800) setCalcEquity(configData.total_equity); // Auto-fill calc equity
+          if (calcEquity === 800) setCalcEquity(configData.total_equity);
         }
 
         const { data: queueData, error: queueError } = await supabase
@@ -132,83 +130,54 @@ export default function QuantTerminal() {
     if (slDistance > 0) {
       lotSize = riskAmount / (slDistance * pipValuePerLot);
     }
-    
     setCalcRiskAmount(riskAmount);
     setCalcLotSize(lotSize);
   };
 
+  // Note the h-[100dvh] - This accounts for mobile browser URL bars hiding/showing dynamically
   return (
-    <div className="min-h-screen bg-background text-foreground p-2 md:p-4 flex flex-col gap-4">
+    <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono">
       
-      {/* HEADER */}
-      <header className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-        <div className="col-span-2 md:col-span-1 p-3 border border-border/50 rounded-lg bg-card flex flex-col justify-center">
-          <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Neural Nexus</h2>
-          <div className="flex gap-2 mt-2">
-            <Button size="sm" variant={activeTab === "TERMINAL" ? "default" : "outline"} onClick={() => setActiveTab("TERMINAL")} className="text-xs w-full">TERMINAL</Button>
-            <Button size="sm" variant={activeTab === "CALCULATOR" ? "default" : "outline"} onClick={() => setActiveTab("CALCULATOR")} className="text-xs w-full">CALCULATOR</Button>
-          </div>
+      {/* GLOBAL TOP STATUS BAR (Minimal for Mobile) */}
+      <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0">
+        <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse"}`} />
+          <h1 className="text-sm font-bold tracking-widest uppercase">
+            {config.system_is_killed ? "SYSTEM HALTED" : "NEXUS LIVE"}
+          </h1>
         </div>
-        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex-col justify-center hidden md:flex">
-          <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Total Equity</h2>
-          <p className="text-lg font-bold font-mono">${config.total_equity.toFixed(2)}</p>
-        </div>
-        <div className="col-span-1 p-3 border border-border/50 rounded-lg bg-card flex-col justify-center hidden md:flex">
-          <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">Risk Exposure</h2>
-          <p className="text-lg font-bold font-mono text-destructive">Max Layers: {config.max_allowed_layers}</p>
-        </div>
-        <div className="col-span-2 md:col-span-1 p-3 border border-border/50 rounded-lg bg-card flex flex-col justify-between items-start">
-          <h2 className="text-[10px] text-muted-foreground uppercase tracking-widest font-sans">System Status</h2>
-          <div className="flex items-center gap-2 mt-1">
-            <span className={`h-2 w-2 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse"}`} />
-            <span className={`text-xs font-mono font-bold ${config.system_is_killed ? "text-red-600" : "text-emerald-500"}`}>
-              {config.system_is_killed ? "HALTED" : "OPERATIONAL"}
-            </span>
-          </div>
-        </div>
+        <div className="text-sm font-bold text-primary">${config.total_equity.toFixed(2)}</div>
       </header>
 
-      {/* MAIN CONTENT AREA */}
-      <main className="flex-1 min-h-[600px]">
+      {/* SCROLLABLE MAIN CONTENT CANVAS */}
+      <main className="flex-1 overflow-y-auto p-4 pb-24">
         
-        {/* TERMINAL TAB */}
+        {/* PAGE 1: TERMINAL (Chart + Queue) */}
         {activeTab === "TERMINAL" && (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-            <div className="col-span-1 md:col-span-3 p-4 border border-border/50 rounded-lg bg-card flex flex-col justify-between order-2 md:order-1">
-              <div className="pt-4 border-t border-border/50">
-                <Button 
-                  onClick={toggleKillSwitch}
-                  variant={config.system_is_killed ? "default" : "destructive"} 
-                  className={`w-full font-bold font-mono tracking-wider border transition-colors ${config.system_is_killed ? "bg-emerald-950 text-emerald-400 border-emerald-800 hover:bg-emerald-900" : "bg-red-950 text-red-400 border-red-800 hover:bg-red-900"}`}
-                >
-                  {config.system_is_killed ? "🟢 RESTORE SYSTEM" : "🛑 KILL SWITCH"}
-                </Button>
-              </div>
+          <div className="flex flex-col gap-4 h-full">
+            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md">
+              <TradingViewChart />
             </div>
-
-            <div className="col-span-1 md:col-span-6 p-2 md:p-4 border border-border/50 rounded-lg bg-card flex flex-col order-1 md:order-2">
-              <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-2 font-sans uppercase">Live Charting (XAUUSD)</h3>
-              <div className="flex-1 border border-border/20 rounded bg-zinc-950 overflow-hidden min-h-[350px]">
-                <TradingViewChart />
-              </div>
-            </div>
-
-            <div className="col-span-1 md:col-span-3 p-4 border border-border/50 rounded-lg bg-card flex flex-col order-3">
-              <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-4 font-sans uppercase">Execution Queue</h3>
-              <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+            
+            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
+              <h3 className="text-xs text-muted-foreground border-b border-border/50 pb-2 mb-3 uppercase tracking-wider">Execution Queue</h3>
+              <div className="space-y-2">
                 {loading ? (
-                  <div className="text-xs font-mono text-muted-foreground">Syncing...</div>
+                  <div className="text-xs text-muted-foreground text-center py-4">Syncing...</div>
                 ) : queue.length === 0 ? (
-                  <div className="text-xs font-mono text-muted-foreground">Queue clear.</div>
+                  <div className="text-xs text-muted-foreground text-center py-4">Queue clear.</div>
                 ) : (
                   queue.map((item) => (
-                    <div key={item.id} className="p-2 bg-background border border-border/50 rounded text-xs font-mono shadow-sm">
-                      <span className={item.action === "BUY" ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{item.action}</span>{" "}
-                      {item.ticker}
-                      <div className="text-muted-foreground mt-1 flex justify-between items-center text-[10px]">
-                        <span className="uppercase">{item.status}</span>
-                        <span>{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
+                    <div key={item.id} className="p-3 bg-background border border-border/40 rounded-lg text-xs shadow-sm">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className={`font-bold ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>
+                          {item.action} {item.ticker}
+                        </span>
+                        <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
                       </div>
+                      <span className="text-muted-foreground uppercase text-[10px] bg-secondary/50 px-2 py-1 rounded">
+                        STATUS: {item.status}
+                      </span>
                     </div>
                   ))
                 )}
@@ -217,44 +186,46 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* CALCULATOR TAB */}
+        {/* PAGE 2: RISK CALCULATOR */}
         {activeTab === "CALCULATOR" && (
-          <div className="w-full max-w-md mx-auto p-4 md:p-6 border border-border/50 rounded-lg bg-card">
-            <h3 className="text-lg font-bold font-mono mb-4 text-primary border-b border-border/50 pb-2">XAUUSD Position Sizer</h3>
+          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
+            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3">XAUUSD Position Sizer</h3>
             
-            <div className="space-y-4 font-mono text-sm">
-              <div className="flex flex-col gap-1">
-                <label className="text-muted-foreground">Account Equity ($)</label>
-                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
+            <div className="space-y-5 text-sm">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground font-semibold">Account Equity ($)</label>
+                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-muted-foreground">Risk Percentage (%)</label>
-                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground font-semibold">Risk Percentage (%)</label>
+                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-muted-foreground">Entry Price</label>
-                <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-muted-foreground">Stop Loss Price</label>
-                <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(Number(e.target.value))} className="w-full text-base p-2 bg-background border border-border rounded focus:ring-1 focus:ring-primary outline-none" />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-muted-foreground font-semibold">Entry Price</label>
+                  <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-muted-foreground font-semibold">Stop Loss</label>
+                  <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(Number(e.target.value))} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all" />
+                </div>
               </div>
 
-              <Button onClick={handleCalculate} className="w-full mt-4 font-bold tracking-wider">CALCULATE LOT SIZE</Button>
+              <Button onClick={handleCalculate} size="lg" className="w-full mt-2 font-bold tracking-widest uppercase">Calculate Lot Size</Button>
               
               {calcLotSize > 0 && (
-                <div className="mt-6 p-4 bg-background border border-border/50 rounded-lg space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Capital at Risk:</span>
+                <div className="mt-6 p-5 bg-background border border-border/50 rounded-xl space-y-3 shadow-inner">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">Capital at Risk</span>
                     <span className="font-bold text-destructive">${calcRiskAmount.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Stop Loss Distance:</span>
-                    <span className="font-bold">{Math.abs(calcEntry - calcSL).toFixed(2)} Points</span>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">SL Distance</span>
+                    <span className="font-bold">{Math.abs(calcEntry - calcSL).toFixed(2)} pts</span>
                   </div>
-                  <div className="flex justify-between border-t border-border/50 pt-2 mt-2">
-                    <span className="text-muted-foreground">Recommended Size:</span>
-                    <span className="font-bold text-emerald-500 text-lg">{calcLotSize.toFixed(2)} Lots</span>
+                  <div className="flex justify-between items-center border-t border-border/50 pt-3 mt-3">
+                    <span className="text-muted-foreground font-bold uppercase tracking-wider">Execute Size</span>
+                    <span className="font-bold text-emerald-500 text-2xl">{calcLotSize.toFixed(2)}</span>
                   </div>
                 </div>
               )}
@@ -262,7 +233,61 @@ export default function QuantTerminal() {
           </div>
         )}
 
+        {/* PAGE 3: ADMIN CONTROLS */}
+        {activeTab === "CONTROLS" && (
+          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-6">
+            <div>
+              <h3 className="text-lg font-bold text-primary border-b border-border/50 pb-3 mb-2">Admin Overrides</h3>
+              <p className="text-xs text-muted-foreground">Require master API key authorization to execute.</p>
+            </div>
+            
+            <div className="p-4 border border-red-900/30 bg-red-950/10 rounded-xl">
+              <Button 
+                onClick={toggleKillSwitch}
+                size="lg"
+                variant={config.system_is_killed ? "default" : "destructive"} 
+                className={`w-full font-bold tracking-wider uppercase transition-colors ${config.system_is_killed ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}`}
+              >
+                {config.system_is_killed ? "RESTORE SYSTEM" : "ACTIVATE KILL SWITCH"}
+              </Button>
+              <p className="text-[10px] text-muted-foreground mt-3 text-center">
+                {config.system_is_killed 
+                  ? "SYSTEM HALTED. Inbound signals are currently being dropped." 
+                  : "WARNING: Instantly purges active loops and drops execution routing."}
+              </p>
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* FIXED BOTTOM NAVIGATION BAR (The Native App Feel) */}
+      <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0">
+        <div className="flex justify-around items-center h-16 max-w-md mx-auto px-4">
+          <button 
+            onClick={() => setActiveTab("TERMINAL")} 
+            className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}
+          >
+            <Activity size={20} strokeWidth={activeTab === "TERMINAL" ? 2.5 : 2} />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Terminal</span>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab("CALCULATOR")} 
+            className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CALCULATOR" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}
+          >
+            <Calculator size={20} strokeWidth={activeTab === "CALCULATOR" ? 2.5 : 2} />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Risk Sizer</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab("CONTROLS")} 
+            className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}
+          >
+            <ShieldAlert size={20} strokeWidth={activeTab === "CONTROLS" ? 2.5 : 2} />
+            <span className="text-[10px] font-bold uppercase tracking-wider">Controls</span>
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }
