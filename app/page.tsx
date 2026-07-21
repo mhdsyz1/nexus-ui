@@ -50,11 +50,11 @@ export default function SignalDashboard({ signals }: { signals: QueueItem[] }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800/50">
-          {signals.map((item) => (
+          {(signals || []).map((item) => (
             <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
               <td className="px-4 py-3">
                 <div className="font-bold text-slate-200">{item.ticker}</div>
-                <div className={`text-xs ${item.action.includes('BUY') ? 'text-emerald-400' : 'text-rose-400'}`}>
+                <div className={`text-xs ${item.action?.includes('BUY') ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {item.action}
                 </div>
               </td>
@@ -93,6 +93,13 @@ export default function SignalDashboard({ signals }: { signals: QueueItem[] }) {
               </td>
             </tr>
           ))}
+          {(!signals || signals.length === 0) && (
+            <tr>
+              <td colSpan={5} className="px-4 py-8 text-center text-xs text-slate-500">
+                No active signals in queue.
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
