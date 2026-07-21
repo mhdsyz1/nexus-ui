@@ -21,6 +21,9 @@ interface QueueItem {
   zone_high?: number;
   stop_loss?: number;
   take_profit?: number;
+  market_regime?: string;
+  volume_delta?: number;
+  magnet_node?: number;
 }
 
 // ============================================================================
@@ -68,6 +71,7 @@ export default function QuantTerminal() {
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0 });
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
+  const isFetching = useRef(false);
 
   // Calculator States 
   const [calcEquity, setCalcEquity] = useState<string>("800");
@@ -87,9 +91,12 @@ export default function QuantTerminal() {
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Telemetry & Analytics Polling
+  // 2. Telemetry & Analytics Polling (LOCKED TO PREVENT OVERLAPPING)
   useEffect(() => {
     async function fetchDashboardData() {
+      if (isFetching.current) return;
+      isFetching.current = true;
+
       try {
         const { data: configData, error: configError } = await supabase
           .from("risk_configuration")
@@ -100,7 +107,7 @@ export default function QuantTerminal() {
 
         const { data: queueData, error: queueError } = await supabase
           .from("execution_queue")
-          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit")
+          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node")
           .order("created_at", { ascending: false }).limit(5);
 
         if (!queueError && queueData) setQueue(queueData);
@@ -121,7 +128,6 @@ export default function QuantTerminal() {
           });
         }
         
-        // Fetch Journal History
         if (activeTab === "JOURNAL") {
             const { data: jData } = await supabase
                 .from("trade_journal")
@@ -135,6 +141,7 @@ export default function QuantTerminal() {
         console.error("Telemetry error:", err);
       } finally {
         setLoading(false);
+        isFetching.current = false;
       }
     }
     
@@ -148,10 +155,11 @@ export default function QuantTerminal() {
     if (config.total_equity) setCalcEquity(config.total_equity.toString());
   }, [config.total_equity]);
 
-  // 4. Admin Kill Switch Execution
+  // 4. Admin Kill Switch Execution (STATIC SECURE PATTERN)
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
+    
     const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter Admin API Key to ${actionText} system operations:`);
     if (!adminKey) return; 
 
@@ -162,9 +170,9 @@ export default function QuantTerminal() {
         body: JSON.stringify({ action: currentAction })
       });
       if (res.ok) alert(`Command accepted. System ${currentAction}D.`);
-      else alert("Command rejected.");
+      else alert("Command rejected. Invalid Key.");
     } catch (err) {
-      alert("Fatal: Could not reach middleware pipeline.");
+      alert("Fatal: Could not reach Railway backend.");
     }
   };
 
@@ -178,28 +186,50 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 6. Manual Trade Resolution & Trigger Journal Modal
+  // 6. Manual Trade Resolution (STATIC SECURE PATTERN VIA LOCALSTORAGE)
   const resolveTrade = async (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     try {
+      let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+      if (!vaultSecret) {
+        vaultSecret = window.prompt("Initial Setup: Enter your Webhook Secret Token to authenticate actions.");
+        if (!vaultSecret) {
+            alert("Action aborted: Authentication required.");
+            return;
+        }
+        localStorage.setItem("NEXUS_WEBHOOK_SECRET", vaultSecret);
+      }
+
+      // Optimistic UI update
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
       
-      await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          secret_token: "YOUR_WEBHOOK_SECRET", // <-- REPLACE THIS IN PROD
+          secret_token: vaultSecret,
           trade_id: id, 
           outcome: outcome 
         })
       });
 
-      // Instantly trigger the context journaling engine if executed
+      if (!res.ok) {
+         if (res.status === 401 || res.status === 403) {
+             localStorage.removeItem("NEXUS_WEBHOOK_SECRET"); 
+             alert("Execution failed: Unauthorized token. The vault has been cleared.");
+         }
+         // Revert optimistic update
+         setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item));
+         return;
+      }
+
       if (outcome === "WIN" || outcome === "LOSS" || outcome === "BREAKEVEN") {
           setPendingJournalTradeId(id);
       }
       
     } catch (err) {
       console.error("Failed to update trade outcome:", err);
+      alert("Fatal: Network error reaching backend.");
+      setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item));
     }
   };
 
