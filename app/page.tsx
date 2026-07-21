@@ -52,7 +52,8 @@ function EconomicCalendarWidget() {
   }, []);
 
   return (
-    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-[400px]" ref={container}>
+    // Fixed: Replaced min-h-[400px] with min-h-96
+    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-96" ref={container}>
       <div className="tradingview-widget-container__widget w-full flex-1" />
     </div>
   );
@@ -233,18 +234,34 @@ export default function QuantTerminal() {
     }
   };
 
-  // 7. Push Journal Entry to Supabase
+  // 7. Push Journal Entry to Supabase (ERROR-AWARE PATTERN)
   const submitJournal = async () => {
     if (!pendingJournalTradeId || !journalText.trim()) return;
     try {
-        await supabase.from("trade_journal").insert({
+        const { error } = await supabase.from("trade_journal").insert({
             trade_id: pendingJournalTradeId,
             reason_for_entry: journalText
         });
+
+        if (error) {
+            alert(`Database Rejected Entry: ${error.message}\n\nPlease check your Supabase Row Level Security (RLS) policies for the trade_journal table.`);
+            console.error("Supabase Error Details:", error);
+            return; // Abort here, do not clear the text or close the modal
+        }
+
+        // Only close and clear if the write was successful
         setPendingJournalTradeId(null);
         setJournalText("");
+        
+        // Force refresh of the journal tab to show the new entry immediately
+        if (activeTab === "JOURNAL") {
+            setActiveTab("TERMINAL");
+            setTimeout(() => setActiveTab("JOURNAL"), 50);
+        }
+        
     } catch (err) {
-        console.error("Failed to save journal:", err);
+        console.error("Fatal network error saving journal:", err);
+        alert("Fatal: Network error reaching database.");
     }
   };
 
@@ -257,7 +274,8 @@ export default function QuantTerminal() {
   };
 
   return (
-    <div className="flex flex-col h-[100dvh] overflow-hidden bg-background text-foreground font-mono relative">
+    // Fixed: Replaced h-[100dvh] with h-dvh
+    <div className="flex flex-col h-dvh overflow-hidden bg-background text-foreground font-mono relative">
       
       {/* MODAL OVERLAY: FORCED CONTEXT JOURNALING */}
       {pendingJournalTradeId && (
@@ -325,7 +343,8 @@ export default function QuantTerminal() {
                 <h3 className="text-xs text-muted-foreground uppercase tracking-wider">Execution Queue</h3>
               </div>
               
-              <div className="space-y-4 max-h-[350px] overflow-y-auto pr-1">
+              {/* Fixed: Replaced max-h-[350px] with max-h-96 */}
+              <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
                 {loading ? (
                   <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Ledger...</div>
                 ) : queue.length === 0 ? (
@@ -403,7 +422,8 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md min-h-[300px]">
+            {/* Fixed: Replaced min-h-[300px] with min-h-80 */}
+            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md min-h-80">
               <EconomicCalendarWidget />
             </div>
           </div>
@@ -425,7 +445,8 @@ export default function QuantTerminal() {
                         journalHistory.map((log) => (
                             <div key={log.id} className="p-3 bg-zinc-900/50 border border-border/50 rounded-lg flex flex-col gap-2">
                                 <div className="text-[10px] text-muted-foreground flex justify-between items-center border-b border-border/20 pb-1">
-                                    <span>Log ID: {log.id.split("-")[0]}</span>
+                                    {/* Fixed: Wrapped log.id in String() to prevent split() crash on non-string IDs */}
+                                    <span>Log ID: {String(log.id).split("-")[0]}</span>
                                     <span>{new Date(log.created_at).toLocaleDateString()}</span>
                                 </div>
                                 <p className="text-xs text-foreground mt-1 leading-relaxed">{log.reason_for_entry}</p>
