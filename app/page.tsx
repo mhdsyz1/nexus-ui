@@ -102,7 +102,7 @@ export default function QuantTerminal() {
         const { data: configData, error: configError } = await supabase
           .from("risk_configuration")
           .select("total_equity, max_allowed_layers, system_is_killed")
-          .order("id", { ascending: false }).limit(1).single();
+          .order("created_at", { ascending: false }).limit(1).single();
 
         if (!configError && configData) setConfig(configData);
 
