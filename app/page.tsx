@@ -52,7 +52,6 @@ function EconomicCalendarWidget() {
   }, []);
 
   return (
-    // Fixed: Replaced min-h-[400px] with min-h-96
     <div className="tradingview-widget-container w-full h-full flex flex-col min-h-96" ref={container}>
       <div className="tradingview-widget-container__widget w-full flex-1" />
     </div>
@@ -67,7 +66,7 @@ export default function QuantTerminal() {
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL">("TERMINAL");
   
   // Backend & Analytics States
-  const [config, setConfig] = useState<RiskConfig>({ total_equity: 800.0, max_allowed_layers: 4, system_is_killed: false });
+  const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0 });
   const [loading, setLoading] = useState(true);
@@ -75,13 +74,14 @@ export default function QuantTerminal() {
   const isFetching = useRef(false);
 
   // Calculator States 
-  const [calcEquity, setCalcEquity] = useState<string>("800");
+  const [calcEquity, setCalcEquity] = useState<string>("250");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
   const [calcEntry, setCalcEntry] = useState<string>("2350.00");
   const [calcSL, setCalcSL] = useState<string>("2345.00");
 
   // Journaling States
   const [pendingJournalTradeId, setPendingJournalTradeId] = useState<string | null>(null);
+  const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
   const [journalText, setJournalText] = useState("");
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
 
@@ -156,12 +156,12 @@ export default function QuantTerminal() {
     if (config.total_equity) setCalcEquity(config.total_equity.toString());
   }, [config.total_equity]);
 
-  // 4. Admin Kill Switch Execution (STATIC SECURE PATTERN)
+  // 4. Admin Kill Switch Execution
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
     
-    const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter Admin API Key to ${actionText} system operations:`);
+    const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter your Webhook Secret Token to ${actionText} system operations:`);
     if (!adminKey) return; 
 
     try {
@@ -171,7 +171,7 @@ export default function QuantTerminal() {
         body: JSON.stringify({ action: currentAction })
       });
       if (res.ok) alert(`Command accepted. System ${currentAction}D.`);
-      else alert("Command rejected. Invalid Key.");
+      else alert("Command rejected. Invalid Token.");
     } catch (err) {
       alert("Fatal: Could not reach Railway backend.");
     }
@@ -187,82 +187,75 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 6. Manual Trade Resolution (STATIC SECURE PATTERN VIA LOCALSTORAGE)
-  const resolveTrade = async (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
-    try {
-      let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+  // 6. Manual Trade Resolution (Trigger Modal)
+  const resolveTrade = (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
+    let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    if (!vaultSecret) {
+      vaultSecret = window.prompt("Initial Setup: Enter your Webhook Secret Token to authenticate actions.");
       if (!vaultSecret) {
-        vaultSecret = window.prompt("Initial Setup: Enter your Webhook Secret Token to authenticate actions.");
-        if (!vaultSecret) {
-            alert("Action aborted: Authentication required.");
-            return;
-        }
-        localStorage.setItem("NEXUS_WEBHOOK_SECRET", vaultSecret);
+          alert("Action aborted: Authentication required.");
+          return;
+      }
+      localStorage.setItem("NEXUS_WEBHOOK_SECRET", vaultSecret);
+    }
+
+    if (outcome === "DROPPED") {
+       executeAtomicResolution(id, outcome, "Setup dropped. Did not execute.", vaultSecret);
+       return;
+    }
+
+    setPendingJournalTradeId(id);
+    setPendingOutcome(outcome);
+  };
+
+  // 7. Atomic Execution (Supabase + FastAPI)
+  const executeAtomicResolution = async (id: string, outcome: string, journalEntry: string, secret: string) => {
+    try {
+      setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
+
+      const { error: dbError } = await supabase.from("trade_journal").insert({
+          trade_id: id,
+          reason_for_entry: journalEntry
+      });
+
+      if (dbError) {
+          alert(`Database Rejected Entry: ${dbError.message}`);
+          setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
+          return;
       }
 
-      // Optimistic UI update
-      setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
-      
       const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          secret_token: vaultSecret,
-          trade_id: id, 
-          outcome: outcome 
-        })
+        body: JSON.stringify({ secret_token: secret, trade_id: id, outcome: outcome })
       });
 
       if (!res.ok) {
-         if (res.status === 401 || res.status === 403) {
-             localStorage.removeItem("NEXUS_WEBHOOK_SECRET"); 
-             alert("Execution failed: Unauthorized token. The vault has been cleared.");
-         }
-         // Revert optimistic update
-         setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item));
+         if (res.status === 401 || res.status === 403) localStorage.removeItem("NEXUS_WEBHOOK_SECRET");
+         setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
+         alert("Execution failed at API layer.");
          return;
       }
 
-      if (outcome === "WIN" || outcome === "LOSS" || outcome === "BREAKEVEN") {
-          setPendingJournalTradeId(id);
+      setPendingJournalTradeId(null);
+      setPendingOutcome(null);
+      setJournalText("");
+
+      if (activeTab === "JOURNAL") {
+          setActiveTab("TERMINAL");
+          setTimeout(() => setActiveTab("JOURNAL"), 50);
       }
-      
+
     } catch (err) {
-      console.error("Failed to update trade outcome:", err);
       alert("Fatal: Network error reaching backend.");
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item));
     }
   };
 
-  // 7. Push Journal Entry to Supabase (ERROR-AWARE PATTERN)
-  const submitJournal = async () => {
-    if (!pendingJournalTradeId || !journalText.trim()) return;
-    try {
-        const { error } = await supabase.from("trade_journal").insert({
-            trade_id: pendingJournalTradeId,
-            reason_for_entry: journalText
-        });
-
-        if (error) {
-            alert(`Database Rejected Entry: ${error.message}\n\nPlease check your Supabase Row Level Security (RLS) policies for the trade_journal table.`);
-            console.error("Supabase Error Details:", error);
-            return; // Abort here, do not clear the text or close the modal
-        }
-
-        // Only close and clear if the write was successful
-        setPendingJournalTradeId(null);
-        setJournalText("");
-        
-        // Force refresh of the journal tab to show the new entry immediately
-        if (activeTab === "JOURNAL") {
-            setActiveTab("TERMINAL");
-            setTimeout(() => setActiveTab("JOURNAL"), 50);
-        }
-        
-    } catch (err) {
-        console.error("Fatal network error saving journal:", err);
-        alert("Fatal: Network error reaching database.");
-    }
+  const submitJournal = () => {
+     if (!pendingJournalTradeId || !pendingOutcome || !journalText.trim()) return;
+     const secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+     executeAtomicResolution(pendingJournalTradeId, pendingOutcome, journalText, secret!);
   };
 
   const calculateSignalLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
@@ -274,7 +267,6 @@ export default function QuantTerminal() {
   };
 
   return (
-    // Fixed: Replaced h-[100dvh] with h-dvh
     <div className="flex flex-col h-dvh overflow-hidden bg-background text-foreground font-mono relative">
       
       {/* MODAL OVERLAY: FORCED CONTEXT JOURNALING */}
@@ -292,7 +284,7 @@ export default function QuantTerminal() {
                     onChange={(e) => setJournalText(e.target.value)}
                 />
                 <div className="flex gap-2 pt-2">
-                    <Button variant="ghost" className="flex-1 border border-border/50 text-xs tracking-wider" onClick={() => setPendingJournalTradeId(null)}>SKIP</Button>
+                    <Button variant="ghost" className="flex-1 border border-border/50 text-xs tracking-wider" onClick={() => { setPendingJournalTradeId(null); setPendingOutcome(null); }}>SKIP</Button>
                     <Button className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold tracking-wider" onClick={submitJournal}>SAVE ENTRY</Button>
                 </div>
             </div>
@@ -343,7 +335,6 @@ export default function QuantTerminal() {
                 <h3 className="text-xs text-muted-foreground uppercase tracking-wider">Execution Queue</h3>
               </div>
               
-              {/* Fixed: Replaced max-h-[350px] with max-h-96 */}
               <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
                 {loading ? (
                   <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Ledger...</div>
@@ -422,7 +413,6 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            {/* Fixed: Replaced min-h-[300px] with min-h-80 */}
             <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md min-h-80">
               <EconomicCalendarWidget />
             </div>
@@ -445,7 +435,6 @@ export default function QuantTerminal() {
                         journalHistory.map((log) => (
                             <div key={log.id} className="p-3 bg-zinc-900/50 border border-border/50 rounded-lg flex flex-col gap-2">
                                 <div className="text-[10px] text-muted-foreground flex justify-between items-center border-b border-border/20 pb-1">
-                                    {/* Fixed: Wrapped log.id in String() to prevent split() crash on non-string IDs */}
                                     <span>Log ID: {String(log.id).split("-")[0]}</span>
                                     <span>{new Date(log.created_at).toLocaleDateString()}</span>
                                 </div>
