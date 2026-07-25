@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText, Flame } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -27,48 +27,16 @@ interface QueueItem {
 }
 
 // ============================================================================
-// WIDGET: ECONOMIC CALENDAR (FOREX FACTORY STYLE)
-// ============================================================================
-function EconomicCalendarWidget() {
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!container.current) return;
-    container.current.innerHTML = "";
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-events.js";
-    script.type = "text/javascript";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      colorTheme: "dark",
-      isTransparent: true,
-      width: "100%",
-      height: "100%",
-      locale: "en",
-      importanceFilter: "-1,0,1", 
-      currencyFilter: "USD,EUR,GBP,JPY,AUD,CAD,CHF" 
-    });
-    container.current.appendChild(script);
-  }, []);
-
-  return (
-    <div className="tradingview-widget-container w-full h-full flex flex-col min-h-96" ref={container}>
-      <div className="tradingview-widget-container__widget w-full flex-1" />
-    </div>
-  );
-}
-
-// ============================================================================
 // MAIN APP ARCHITECTURE
 // ============================================================================
 export default function QuantTerminal() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL">("TERMINAL");
+  const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL" | "BURNER">("TERMINAL");
   
   // Backend & Analytics States
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 }); // Added netPnL
+  const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 });
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
@@ -84,7 +52,7 @@ export default function QuantTerminal() {
   const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
   const [journalText, setJournalText] = useState("");
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
-  const [pnlInput, setPnlInput] = useState<string>("0.00"); // NEW: PnL Input State
+  const [pnlInput, setPnlInput] = useState<string>("0.00"); 
 
   // 1. Live Clock Sync
   useEffect(() => {
@@ -93,7 +61,7 @@ export default function QuantTerminal() {
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Telemetry & Analytics Polling (LOCKED TO PREVENT OVERLAPPING)
+  // 2. Telemetry & Analytics Polling 
   useEffect(() => {
     async function fetchDashboardData() {
       if (isFetching.current) return;
@@ -191,7 +159,7 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-// 6. Manual Trade Resolution (Trigger Modal)
+  // 6. Manual Trade Resolution (Trigger Modal)
   const resolveTrade = (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!vaultSecret) {
@@ -235,7 +203,7 @@ export default function QuantTerminal() {
           secret_token: secret,
           trade_id: id,
           outcome: outcome,
-          pnl_amount: parseFloat(pnlInput) || 0 // NEW: Pass the PnL
+          pnl_amount: parseFloat(pnlInput) || 0 
          })
       });
 
@@ -249,6 +217,7 @@ export default function QuantTerminal() {
       setPendingJournalTradeId(null);
       setPendingOutcome(null);
       setJournalText("");
+      setPnlInput("0.00");
 
       if (activeTab === "JOURNAL") {
           setActiveTab("TERMINAL");
@@ -287,7 +256,6 @@ export default function QuantTerminal() {
                     <p className="text-xs text-muted-foreground mt-1">Why did you execute this specific setup?</p>
                 </div>
 
-                {/* --- NEW PNL INPUT GOES HERE --- */}
                 {(pendingOutcome === "WIN" || pendingOutcome === "LOSS") && (
                   <div className="flex flex-col gap-1.5 pb-2">
                     <label className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Realized PnL ($)</label>
@@ -301,7 +269,6 @@ export default function QuantTerminal() {
                     />
                   </div>
                 )}
-                {/* ------------------------------- */}
 
                 <textarea 
                     className="w-full h-32 p-3 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
@@ -353,7 +320,7 @@ export default function QuantTerminal() {
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
                 <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="col-span-2 p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Net PnL</span>
                 <span className={`text-lg font-bold ${analytics.netPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                   ${analytics.netPnL.toFixed(2)}
@@ -445,8 +412,12 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950 overflow-hidden shadow-md min-h-80">
-              <EconomicCalendarWidget />
+            {/* RESERVED TERMINAL SPACE */}
+            <div className="flex-1 border-2 border-border/30 border-dashed rounded-xl bg-zinc-950/30 flex flex-col items-center justify-center shadow-inner min-h-80 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <Target size={24} className="text-muted-foreground/50 mb-2" />
+              <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">Reserved Module Space</span>
+              <span className="text-[9px] text-muted-foreground/70 mt-1">Awaiting future quant function</span>
             </div>
           </div>
         )}
@@ -547,6 +518,29 @@ export default function QuantTerminal() {
             </div>
           </div>
         )}
+
+        {/* PAGE 5: KINETIC NEWS BURNER (FULL MARGIN) */}
+        {activeTab === "BURNER" && (
+          <div className="flex flex-col gap-4 h-full">
+            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-2">
+                <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-2">
+                    <Flame size={16} className="text-orange-500" />
+                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider">Kinetic Event Protocol</h3>
+                </div>
+                <div className="p-3 border border-orange-900/30 bg-orange-950/10 rounded-lg flex justify-between items-center">
+                    <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Burner Equity</span>
+                    <span className="text-lg font-bold text-foreground">$50.00</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
+                  Isolated full-margin execution sandbox. This module will autonomously ping macro API endpoints and front-run delta shifts during red-folder USD events.
+                </p>
+            </div>
+            
+            <div className="flex-1 border-2 border-orange-900/20 border-dashed rounded-xl bg-zinc-950/30 flex flex-col items-center justify-center text-muted-foreground shadow-inner min-h-80">
+              <span className="text-xs uppercase tracking-widest font-bold text-orange-900/50">Module Offline</span>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* FIXED BOTTOM NAVIGATION BAR */}
@@ -570,6 +564,11 @@ export default function QuantTerminal() {
           <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
             <ShieldAlert size={20} strokeWidth={activeTab === "CONTROLS" ? 2.5 : 2} />
             <span className="text-[9px] font-bold uppercase tracking-wider">Controls</span>
+          </button>
+
+          <button onClick={() => setActiveTab("BURNER")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "BURNER" ? "text-orange-500" : "text-muted-foreground hover:text-orange-500/70"}`}>
+            <Flame size={20} strokeWidth={activeTab === "BURNER" ? 2.5 : 2} />
+            <span className="text-[9px] font-bold uppercase tracking-wider">Burner</span>
           </button>
         </div>
       </nav>
