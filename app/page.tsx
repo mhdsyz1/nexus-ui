@@ -187,7 +187,7 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 6. Manual Trade Resolution (Trigger Modal)
+// 6. Manual Trade Resolution (Trigger Modal)
   const resolveTrade = (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!vaultSecret) {
