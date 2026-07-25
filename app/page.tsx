@@ -24,6 +24,7 @@ interface QueueItem {
   market_regime?: string;
   volume_delta?: number;
   magnet_node?: number;
+  structure?: string; // NEW: Added structure field
 }
 
 // ============================================================================
@@ -75,9 +76,10 @@ export default function QuantTerminal() {
 
         if (!configError && configData) setConfig(configData);
 
+        // NEW: Added structure to the select query
         const { data: queueData, error: queueError } = await supabase
           .from("execution_queue")
-          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node")
+          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node, structure")
           .order("created_at", { ascending: false }).limit(5);
 
         if (!queueError && queueData) setQueue(queueData);
@@ -412,12 +414,57 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            {/* RESERVED TERMINAL SPACE */}
-            <div className="flex-1 border-2 border-border/30 border-dashed rounded-xl bg-zinc-950/30 flex flex-col items-center justify-center shadow-inner min-h-80 relative overflow-hidden group">
-              <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <Target size={24} className="text-muted-foreground/50 mb-2" />
-              <span className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">Reserved Module Space</span>
-              <span className="text-[9px] text-muted-foreground/70 mt-1">Awaiting future quant function</span>
+            {/* LIVE TELEMETRY MATRIX HUD */}
+            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner min-h-80 relative overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between p-3 border-b border-border/30 bg-zinc-900/50">
+                <div className="flex items-center gap-2">
+                  <Activity size={14} className="text-primary" />
+                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Quant Telemetry Matrix</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[9px] text-emerald-500 font-bold uppercase tracking-widest">Live Sync</span>
+                </div>
+              </div>
+              
+              <div className="p-4 grid grid-cols-2 gap-3 flex-1 content-start">
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Market Regime</span>
+                  <span className={`text-sm font-bold ${queue[0]?.market_regime === "TRENDING" ? "text-cyan-400" : queue[0]?.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
+                    {queue[0]?.market_regime || "AWAITING DATA"}
+                  </span>
+                </div>
+                
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Structure</span>
+                  <span className="text-sm font-bold text-foreground">
+                    {queue[0]?.structure || "NEUTRAL"}
+                  </span>
+                </div>
+
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Footprint Delta</span>
+                  <span className={`text-sm font-bold ${Number(queue[0]?.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                    {queue[0]?.volume_delta ? Number(queue[0].volume_delta).toLocaleString() : "0"}
+                  </span>
+                </div>
+
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Inst. Magnet</span>
+                  <span className="text-sm font-bold text-amber-400">
+                    ${queue[0]?.magnet_node?.toFixed(2) || "0.00"}
+                  </span>
+                </div>
+              </div>
+              
+              <div className="mt-auto p-3 bg-zinc-900/30 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground text-center">
+                  Engine aggregates 1M micro-variance inside M15 boundaries. Min Delta: 1,000.
+                </p>
+              </div>
             </div>
           </div>
         )}
