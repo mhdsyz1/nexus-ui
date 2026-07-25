@@ -68,7 +68,7 @@ export default function QuantTerminal() {
   // Backend & Analytics States
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0 });
+  const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 }); // Added netPnL
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
@@ -84,6 +84,7 @@ export default function QuantTerminal() {
   const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
   const [journalText, setJournalText] = useState("");
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
+  const [pnlInput, setPnlInput] = useState<string>("0.00"); // NEW: PnL Input State
 
   // 1. Live Clock Sync
   useEffect(() => {
@@ -115,17 +116,20 @@ export default function QuantTerminal() {
 
         const { data: statsData, error: statsError } = await supabase
           .from("execution_queue")
-          .select("status")
+          .select("status, realized_pnl")
           .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
 
         if (!statsError && statsData) {
           const wins = statsData.filter(t => t.status === "WIN").length;
           const losses = statsData.filter(t => t.status === "LOSS").length;
           const total = statsData.length;
+          const totalPnL = statsData.reduce((sum, trade) => sum + (trade.realized_pnl || 0), 0);
+          
           setAnalytics({
             totalWins: wins,
             totalLosses: losses,
-            winRate: total > 0 ? (wins / total) * 100 : 0
+            winRate: total > 0 ? (wins / total) * 100 : 0,
+            netPnL: totalPnL
           });
         }
         
@@ -227,7 +231,12 @@ export default function QuantTerminal() {
       const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secret_token: secret, trade_id: id, outcome: outcome })
+        body: JSON.stringify({ 
+          secret_token: secret,
+          trade_id: id,
+          outcome: outcome,
+          pnl_amount: parseFloat(pnlInput) || 0 // NEW: Pass the PnL
+         })
       });
 
       if (!res.ok) {
@@ -277,6 +286,23 @@ export default function QuantTerminal() {
                     <h3 className="text-lg font-bold text-primary tracking-wider uppercase">Log Trade Context</h3>
                     <p className="text-xs text-muted-foreground mt-1">Why did you execute this specific setup?</p>
                 </div>
+
+                {/* --- NEW PNL INPUT GOES HERE --- */}
+                {(pendingOutcome === "WIN" || pendingOutcome === "LOSS") && (
+                  <div className="flex flex-col gap-1.5 pb-2">
+                    <label className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Realized PnL ($)</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      className="w-full p-2 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm text-foreground"
+                      placeholder={pendingOutcome === "WIN" ? "+15.50" : "-5.00"}
+                      value={pnlInput}
+                      onChange={(e) => setPnlInput(e.target.value)}
+                    />
+                  </div>
+                )}
+                {/* ------------------------------- */}
+
                 <textarea 
                     className="w-full h-32 p-3 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
                     placeholder="e.g., M5 orderblock tap aligned with H1 bullish trend. Clean price action rejection."
@@ -326,6 +352,12 @@ export default function QuantTerminal() {
               <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
                 <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
+              </div>
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Net PnL</span>
+                <span className={`text-lg font-bold ${analytics.netPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  ${analytics.netPnL.toFixed(2)}
+                </span>
               </div>
             </div>
 
