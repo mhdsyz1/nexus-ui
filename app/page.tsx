@@ -11,6 +11,17 @@ interface RiskConfig {
   system_is_killed: boolean;
 }
 
+interface TradeLayer {
+  id: string;
+  trade_id: string;
+  layer_type: "T1" | "T2" | "T3";
+  risk_pct: number;
+  target_price: number;
+  stop_loss: number;
+  status: "PENDING" | "HIT" | "STOPPED_BE" | "STOPPED_SL" | "DROPPED";
+  realized_pnl: number;
+}
+
 interface QueueItem {
   id: string;
   ticker: string;
@@ -24,17 +35,13 @@ interface QueueItem {
   market_regime?: string;
   volume_delta?: number;
   magnet_node?: number;
-  structure?: string; // NEW: Added structure field
+  structure?: string;
+  trade_layers?: TradeLayer[];
 }
 
-// ============================================================================
-// MAIN APP ARCHITECTURE
-// ============================================================================
 export default function QuantTerminal() {
-  // Navigation State
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL" | "BURNER">("TERMINAL");
   
-  // Backend & Analytics States
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 });
@@ -42,100 +49,97 @@ export default function QuantTerminal() {
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
 
-  // Calculator States 
   const [calcEquity, setCalcEquity] = useState<string>("250");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
   const [calcEntry, setCalcEntry] = useState<string>("2350.00");
   const [calcSL, setCalcSL] = useState<string>("2345.00");
 
-  // Journaling States
   const [pendingJournalTradeId, setPendingJournalTradeId] = useState<string | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
   const [journalText, setJournalText] = useState("");
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
   const [pnlInput, setPnlInput] = useState<string>("0.00"); 
 
-  // 1. Live Clock Sync
   useEffect(() => {
     setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Telemetry & Analytics Polling 
-  useEffect(() => {
-    async function fetchDashboardData() {
-      if (isFetching.current) return;
-      isFetching.current = true;
+  const fetchDashboardData = async () => {
+    if (isFetching.current) return;
+    isFetching.current = true;
 
-      try {
-        const { data: configData, error: configError } = await supabase
-          .from("risk_configuration")
-          .select("total_equity, max_allowed_layers, system_is_killed")
-          .order("created_at", { ascending: false }).limit(1).single();
+    try {
+      const { data: configData, error: configError } = await supabase
+        .from("risk_configuration")
+        .select("total_equity, max_allowed_layers, system_is_killed")
+        .order("created_at", { ascending: false }).limit(1).single();
 
-        if (!configError && configData) setConfig(configData);
+      if (!configError && configData) setConfig(configData);
 
-        // NEW: Added structure to the select query
-        const { data: queueData, error: queueError } = await supabase
-          .from("execution_queue")
-          .select("id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node, structure")
-          .order("created_at", { ascending: false }).limit(5);
+      // Hydrate relational trade_layers
+      const { data: queueData, error: queueError } = await supabase
+        .from("execution_queue")
+        .select(`
+          id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node, structure,
+          trade_layers ( id, trade_id, layer_type, risk_pct, target_price, stop_loss, status, realized_pnl )
+        `)
+        .order("created_at", { ascending: false }).limit(5);
 
-        if (!queueError && queueData) setQueue(queueData);
+      if (!queueError && queueData) setQueue(queueData as any);
 
-        const { data: statsData, error: statsError } = await supabase
-          .from("execution_queue")
-          .select("status, realized_pnl")
-          .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
+      const { data: statsData, error: statsError } = await supabase
+        .from("execution_queue")
+        .select("status, realized_pnl")
+        .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
 
-        if (!statsError && statsData) {
-          const wins = statsData.filter(t => t.status === "WIN").length;
-          const losses = statsData.filter(t => t.status === "LOSS").length;
-          const total = statsData.length;
-          const totalPnL = statsData.reduce((sum, trade) => sum + (trade.realized_pnl || 0), 0);
-          
-          setAnalytics({
-            totalWins: wins,
-            totalLosses: losses,
-            winRate: total > 0 ? (wins / total) * 100 : 0,
-            netPnL: totalPnL
-          });
-        }
+      if (!statsError && statsData) {
+        const wins = statsData.filter(t => t.status === "WIN").length;
+        const losses = statsData.filter(t => t.status === "LOSS").length;
+        const total = statsData.length;
+        const totalPnL = statsData.reduce((sum, trade) => sum + (trade.realized_pnl || 0), 0);
         
-        if (activeTab === "JOURNAL") {
-            const { data: jData } = await supabase
-                .from("trade_journal")
-                .select("*")
-                .order("created_at", { ascending: false })
-                .limit(10);
-            if (jData) setJournalHistory(jData);
-        }
-
-      } catch (err) {
-        console.error("Telemetry error:", err);
-      } finally {
-        setLoading(false);
-        isFetching.current = false;
+        setAnalytics({
+          totalWins: wins,
+          totalLosses: losses,
+          winRate: total > 0 ? (wins / total) * 100 : 0,
+          netPnL: totalPnL
+        });
       }
+      
+      if (activeTab === "JOURNAL") {
+        const { data: jData } = await supabase
+          .from("trade_journal")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(10);
+        if (jData) setJournalHistory(jData);
+      }
+
+    } catch (err) {
+      console.error("Telemetry error:", err);
+    } finally {
+      setLoading(false);
+      isFetching.current = false;
     }
-    
+  };
+
+  useEffect(() => {
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 5000);
     return () => clearInterval(interval);
   }, [activeTab]);
 
-  // 3. Auto-sync Calculator Equity
   useEffect(() => {
     if (config.total_equity) setCalcEquity(config.total_equity.toString());
   }, [config.total_equity]);
 
-  // 4. Admin Kill Switch Execution
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
     const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
     
-    const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter your Webhook Secret Token to ${actionText} system operations:`);
+    const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter Webhook Secret Token to ${actionText} system:`);
     if (!adminKey) return; 
 
     try {
@@ -151,7 +155,6 @@ export default function QuantTerminal() {
     }
   };
 
-  // 5. Reactive Math Execution
   const equityNum = parseFloat(calcEquity) || 0;
   const riskPctNum = parseFloat(calcRiskPct) || 0;
   const entryNum = parseFloat(calcEntry) || 0;
@@ -161,41 +164,74 @@ export default function QuantTerminal() {
   const pipValuePerLot = 100;
   const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
 
-  // 6. Manual Trade Resolution (Trigger Modal)
+  const resolveSingleLayer = async (
+    layerId: string, 
+    tradeId: string, 
+    layerType: "T1" | "T2" | "T3", 
+    outcome: "HIT" | "STOPPED_BE" | "STOPPED_SL" | "DROPPED",
+    pnl: number
+  ) => {
+    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    if (!secret) {
+      secret = window.prompt("Enter Webhook Secret Token to authenticate:");
+      if (!secret) return;
+      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
+    }
+
+    try {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-layer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          secret_token: secret,
+          layer_id: layerId,
+          trade_id: tradeId,
+          layer_type: layerType,
+          outcome: outcome,
+          pnl_amount: pnl
+        })
+      });
+
+      if (res.ok) {
+        fetchDashboardData();
+      } else {
+        alert("Layer resolution failed.");
+      }
+    } catch (err) {
+      alert("Network error.");
+    }
+  };
+
   const resolveTrade = (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
     let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!vaultSecret) {
-      vaultSecret = window.prompt("Initial Setup: Enter your Webhook Secret Token to authenticate actions.");
-      if (!vaultSecret) {
-          alert("Action aborted: Authentication required.");
-          return;
-      }
+      vaultSecret = window.prompt("Enter Webhook Secret Token to authenticate:");
+      if (!vaultSecret) return;
       localStorage.setItem("NEXUS_WEBHOOK_SECRET", vaultSecret);
     }
 
     if (outcome === "DROPPED") {
-       executeAtomicResolution(id, outcome, "Setup dropped. Did not execute.", vaultSecret);
-       return;
+      executeAtomicResolution(id, outcome, "Setup dropped. Did not execute.", vaultSecret);
+      return;
     }
 
     setPendingJournalTradeId(id);
     setPendingOutcome(outcome);
   };
 
-  // 7. Atomic Execution (Supabase + FastAPI)
   const executeAtomicResolution = async (id: string, outcome: string, journalEntry: string, secret: string) => {
     try {
       setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
 
       const { error: dbError } = await supabase.from("trade_journal").insert({
-          trade_id: id,
-          reason_for_entry: journalEntry
+        trade_id: id,
+        reason_for_entry: journalEntry
       });
 
       if (dbError) {
-          alert(`Database Rejected Entry: ${dbError.message}`);
-          setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
-          return;
+        alert(`Database Rejected Entry: ${dbError.message}`);
+        setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
+        return;
       }
 
       const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
@@ -206,25 +242,21 @@ export default function QuantTerminal() {
           trade_id: id,
           outcome: outcome,
           pnl_amount: parseFloat(pnlInput) || 0 
-         })
+        })
       });
 
       if (!res.ok) {
-         if (res.status === 401 || res.status === 403) localStorage.removeItem("NEXUS_WEBHOOK_SECRET");
-         setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
-         alert("Execution failed at API layer.");
-         return;
+        if (res.status === 401 || res.status === 403) localStorage.removeItem("NEXUS_WEBHOOK_SECRET");
+        setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
+        alert("Execution failed at API layer.");
+        return;
       }
 
       setPendingJournalTradeId(null);
       setPendingOutcome(null);
       setJournalText("");
       setPnlInput("0.00");
-
-      if (activeTab === "JOURNAL") {
-          setActiveTab("TERMINAL");
-          setTimeout(() => setActiveTab("JOURNAL"), 50);
-      }
+      fetchDashboardData();
 
     } catch (err) {
       alert("Fatal: Network error reaching backend.");
@@ -233,9 +265,9 @@ export default function QuantTerminal() {
   };
 
   const submitJournal = () => {
-     if (!pendingJournalTradeId || !pendingOutcome || !journalText.trim()) return;
-     const secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
-     executeAtomicResolution(pendingJournalTradeId, pendingOutcome, journalText, secret!);
+    if (!pendingJournalTradeId || !pendingOutcome || !journalText.trim()) return;
+    const secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    executeAtomicResolution(pendingJournalTradeId, pendingOutcome, journalText, secret!);
   };
 
   const calculateSignalLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
@@ -255,7 +287,7 @@ export default function QuantTerminal() {
             <div className="bg-zinc-950 border border-border/50 rounded-xl p-5 w-full max-w-md shadow-2xl flex flex-col gap-4">
                 <div className="border-b border-border/50 pb-3">
                     <h3 className="text-lg font-bold text-primary tracking-wider uppercase">Log Trade Context</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Why did you execute this specific setup?</p>
+                    <p className="text-xs text-muted-foreground mt-1">Why did you execute this setup?</p>
                 </div>
 
                 {(pendingOutcome === "WIN" || pendingOutcome === "LOSS") && (
@@ -274,7 +306,7 @@ export default function QuantTerminal() {
 
                 <textarea 
                     className="w-full h-32 p-3 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
-                    placeholder="e.g., M5 orderblock tap aligned with H1 bullish trend. Clean price action rejection."
+                    placeholder="e.g., M5 orderblock tap aligned with H1 bullish trend."
                     value={journalText}
                     onChange={(e) => setJournalText(e.target.value)}
                 />
@@ -286,7 +318,7 @@ export default function QuantTerminal() {
         </div>
       )}
 
-      {/* GLOBAL TOP STATUS BAR */}
+      {/* TOP STATUS BAR */}
       <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0 shadow-sm">
         <div className="flex items-center gap-2">
           <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"}`} />
@@ -299,30 +331,30 @@ export default function QuantTerminal() {
         </div>
       </header>
 
-      {/* SCROLLABLE MAIN CONTENT CANVAS */}
+      {/* MAIN CANVAS */}
       <main className="flex-1 overflow-y-auto p-4 pb-24">
         
-        {/* PAGE 1: TERMINAL */}
+        {/* TERMINAL */}
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="grid grid-cols-2 gap-2">
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
                 <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
                 <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Wins</span>
                 <span className="text-lg font-bold text-foreground">{analytics.totalWins}</span>
               </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
                 <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
               </div>
-              <div className="col-span-2 p-3 border border-border/50 rounded-xl bg-zinc-900/50 shadow-sm flex flex-col items-center justify-center">
+              <div className="col-span-2 p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Net PnL</span>
                 <span className={`text-lg font-bold ${analytics.netPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                   ${analytics.netPnL.toFixed(2)}
@@ -344,9 +376,6 @@ export default function QuantTerminal() {
                 ) : (
                   queue.map((item) => {
                     const isPending = item.status === "PENDING";
-                    const lotT1 = calculateSignalLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
-                    const lotT2 = calculateSignalLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
-                    const lotT3 = calculateSignalLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
 
                     return (
                       <div key={item.id} className={`p-3 border rounded-lg text-xs shadow-sm flex flex-col gap-3 transition-colors ${isPending ? "bg-zinc-950 border-primary/30" : "bg-background border-border/40 opacity-75"}`}>
@@ -371,40 +400,80 @@ export default function QuantTerminal() {
                               <span className="text-muted-foreground text-[10px] uppercase">Take Profit</span>
                               <span className="font-bold text-emerald-400">{item.take_profit?.toFixed(2)}</span>
                             </div>
-                            
-                            <div className="pt-2 grid grid-cols-3 gap-2 text-center">
-                              <div className="bg-zinc-900 rounded p-1">
-                                <div className="text-[9px] text-muted-foreground mb-0.5">T1 (2%)</div>
-                                <div className="font-bold text-primary">{lotT1.toFixed(2)}</div>
-                              </div>
-                              <div className="bg-zinc-900 rounded p-1">
-                                <div className="text-[9px] text-muted-foreground mb-0.5">T2 (4%)</div>
-                                <div className="font-bold text-primary">{lotT2.toFixed(2)}</div>
-                              </div>
-                              <div className="bg-zinc-900 rounded p-1">
-                                <div className="text-[9px] text-muted-foreground mb-0.5">T3 (6%)</div>
-                                <div className="font-bold text-primary">{lotT3.toFixed(2)}</div>
-                              </div>
-                            </div>
                           </div>
                         )}
-                        
-                        {isPending ? (
-                          <div className="grid grid-cols-4 gap-1.5 mt-1">
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">WIN</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-8 text-[10px] bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 font-bold border border-rose-500/20">LOSS</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-8 text-[10px] bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 font-bold border border-zinc-500/20">BE</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-8 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
+
+                        {/* PHASE 2.2: MULTI-TRANCHE RUNNER MATRIX UI */}
+                        {item.trade_layers && item.trade_layers.length > 0 && (
+                          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/30">
+                            {item.trade_layers.sort((a,b) => a.layer_type.localeCompare(b.layer_type)).map((layer) => {
+                              const layerPending = layer.status === "PENDING";
+                              const layerLot = calculateSignalLots(config.total_equity, layer.risk_pct, item.zone_low, item.zone_high, item.stop_loss);
+
+                              return (
+                                <div key={layer.id} className="bg-zinc-900/80 p-2 rounded-lg border border-border/40 flex flex-col gap-1.5">
+                                  <div className="flex justify-between items-center">
+                                    <span className="font-bold text-[10px] text-primary">{layer.layer_type} ({Math.round(layer.risk_pct * 100)}%)</span>
+                                    <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                                      layer.status === "HIT" ? "bg-emerald-500/20 text-emerald-400" :
+                                      layer.status === "STOPPED_SL" ? "bg-rose-500/20 text-rose-400" :
+                                      layer.status === "STOPPED_BE" ? "bg-amber-500/20 text-amber-400" :
+                                      "bg-zinc-800 text-muted-foreground"
+                                    }`}>
+                                      {layer.status}
+                                    </span>
+                                  </div>
+
+                                  <div className="text-[10px] font-bold text-foreground flex justify-between">
+                                    <span className="text-muted-foreground text-[8px]">Size:</span>
+                                    <span>{layerLot.toFixed(2)} Lots</span>
+                                  </div>
+
+                                  {layerPending && item.status === "PENDING" && (
+                                    <div className="grid grid-cols-2 gap-1 pt-1">
+                                      <Button 
+                                        size="sm" 
+                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "HIT", 15.00)} 
+                                        className="h-5 text-[8px] bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 p-0 font-bold"
+                                      >
+                                        HIT
+                                      </Button>
+                                      <Button 
+                                        size="sm" 
+                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "STOPPED_BE", 0.00)} 
+                                        className="h-5 text-[8px] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 p-0 font-bold"
+                                      >
+                                        BE
+                                      </Button>
+                                      <Button 
+                                        size="sm" 
+                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "STOPPED_SL", -5.00)} 
+                                        className="h-5 text-[8px] bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 p-0 font-bold"
+                                      >
+                                        SL
+                                      </Button>
+                                      <Button 
+                                        size="sm" 
+                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "DROPPED", 0.00)} 
+                                        variant="ghost" 
+                                        className="h-5 text-[8px] text-muted-foreground p-0 font-bold border border-border/40"
+                                      >
+                                        DROP
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
-                        ) : (
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className={`uppercase text-[10px] px-2 py-1 rounded font-bold ${
-                              item.status === "WIN" ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" :
-                              item.status === "LOSS" ? "bg-rose-500/10 text-rose-500 border border-rose-500/20" :
-                              "bg-secondary/50 text-muted-foreground border border-border/50"
-                            }`}>
-                              {item.status}
-                            </span>
+                        )}
+
+                        {isPending && (
+                          <div className="grid grid-cols-4 gap-1.5 mt-1">
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">ALL WIN</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-8 text-[10px] bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 font-bold border border-rose-500/20">ALL SL</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-8 text-[10px] bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 font-bold border border-zinc-500/20">ALL BE</Button>
+                            <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-8 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
                           </div>
                         )}
                       </div>
@@ -414,7 +483,7 @@ export default function QuantTerminal() {
               </div>
             </div>
 
-            {/* LIVE TELEMETRY MATRIX HUD */}
+            {/* TELEMETRY MATRIX HUD */}
             <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner min-h-80 relative overflow-hidden flex flex-col">
               <div className="flex items-center justify-between p-3 border-b border-border/30 bg-zinc-900/50">
                 <div className="flex items-center gap-2">
@@ -431,45 +500,39 @@ export default function QuantTerminal() {
               </div>
               
               <div className="p-4 grid grid-cols-2 gap-3 flex-1 content-start">
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Market Regime</span>
                   <span className={`text-sm font-bold ${queue[0]?.market_regime === "TRENDING" ? "text-cyan-400" : queue[0]?.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
                     {queue[0]?.market_regime || "AWAITING DATA"}
                   </span>
                 </div>
                 
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Structure</span>
                   <span className="text-sm font-bold text-foreground">
                     {queue[0]?.structure || "NEUTRAL"}
                   </span>
                 </div>
 
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Footprint Delta</span>
                   <span className={`text-sm font-bold ${Number(queue[0]?.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
                     {queue[0]?.volume_delta ? Number(queue[0].volume_delta).toLocaleString() : "0"}
                   </span>
                 </div>
 
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50 shadow-sm">
+                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Inst. Magnet</span>
                   <span className="text-sm font-bold text-amber-400">
                     ${queue[0]?.magnet_node?.toFixed(2) || "0.00"}
                   </span>
                 </div>
               </div>
-              
-              <div className="mt-auto p-3 bg-zinc-900/30 border-t border-border/20">
-                <p className="text-[9px] text-muted-foreground text-center">
-                  Engine aggregates 1M micro-variance inside M15 boundaries. Min Delta: 1,000.
-                </p>
-              </div>
             </div>
           </div>
         )}
 
-        {/* PAGE 2: JOURNAL LOGS */}
+        {/* JOURNAL */}
         {activeTab === "JOURNAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
@@ -497,7 +560,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* PAGE 3: REACTIVE RISK CALCULATOR */}
+        {/* CALCULATOR */}
         {activeTab === "CALCULATOR" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
             <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3 font-mono">XAUUSD Position Sizer</h3>
@@ -545,7 +608,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* PAGE 4: ADMIN CONTROLS */}
+        {/* CONTROLS */}
         {activeTab === "CONTROLS" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-6">
             <div>
@@ -566,7 +629,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* PAGE 5: KINETIC NEWS BURNER (FULL MARGIN) */}
+        {/* BURNER */}
         {activeTab === "BURNER" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-2">
@@ -579,7 +642,7 @@ export default function QuantTerminal() {
                     <span className="text-lg font-bold text-foreground">$50.00</span>
                 </div>
                 <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-                  Isolated full-margin execution sandbox. This module will autonomously ping macro API endpoints and front-run delta shifts during red-folder USD events.
+                  Isolated full-margin execution sandbox.
                 </p>
             </div>
             
@@ -590,7 +653,7 @@ export default function QuantTerminal() {
         )}
       </main>
 
-      {/* FIXED BOTTOM NAVIGATION BAR */}
+      {/* BOTTOM NAV */}
       <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0 z-40">
         <div className="flex justify-around items-center h-16 max-w-md mx-auto px-2">
           <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
