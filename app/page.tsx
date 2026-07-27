@@ -143,7 +143,7 @@ export default function QuantTerminal() {
     if (!adminKey) return; 
 
     try {
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/kill-switch", {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/kill-switch", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
         body: JSON.stringify({ action: currentAction })
@@ -179,7 +179,7 @@ export default function QuantTerminal() {
     }
 
     try {
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-layer", {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/resolve-layer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -234,7 +234,7 @@ export default function QuantTerminal() {
         return;
       }
 
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/api/resolve-trade", {
+      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/resolve-trade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
