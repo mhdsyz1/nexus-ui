@@ -1,687 +1,772 @@
-"use client";
+import os
+import math
+import logging
+import hashlib
+import asyncio
+import httpx
+import html
+from datetime import datetime, timezone, timedelta
+from contextlib import asynccontextmanager
+from typing import Literal, Optional, Any
+from cachetools import TTLCache
+from fastapi import FastAPI, Request, status, BackgroundTasks, HTTPException, Depends
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, model_validator
+import ipaddress
+from sqlalchemy import text
 
-import { useEffect, useState, useRef } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, Flame } from "lucide-react"; 
+from trading_state import process_engine_state, AsyncSessionLocal
+from telegram_bot import broadcast_trade, broadcast_parole_restoration, _get_bot, TELEGRAM_CHAT_ID
 
-interface RiskConfig {
-  total_equity: number;
-  max_allowed_layers: number;
-  system_is_killed: boolean;
-}
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("middleware_layer")
 
-interface TradeLayer {
-  id: string;
-  trade_id: string;
-  layer_type: "T1" | "T2" | "T3";
-  risk_pct: number;
-  target_price: number;
-  stop_loss: number;
-  status: "PENDING" | "HIT" | "STOPPED_BE" | "STOPPED_SL" | "DROPPED";
-  realized_pnl: number;
-}
+# ============================================================
+# ENVIRONMENT & INFRASTRUCTURE CONFIGURATION
+# ============================================================
+idempotency_cache = TTLCache(maxsize=1000, ttl=60)
+WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+MIN_SIGNAL_SCORE = 50 
 
-interface QueueItem {
-  id: string;
-  ticker: string;
-  action: string;
-  status: string;
-  created_at: string;
-  zone_low?: number;
-  zone_high?: number;
-  stop_loss?: number;
-  take_profit?: number;
-  market_regime?: string;
-  volume_delta?: number;
-  magnet_node?: number;
-  structure?: string;
-  trade_layers?: TradeLayer[];
-}
+TRADINGVIEW_IPS = [
+    ipaddress.ip_network("52.89.214.238/32"),
+    ipaddress.ip_network("34.212.75.30/32"),
+    ipaddress.ip_network("54.218.53.128/32"),
+    ipaddress.ip_network("52.32.178.7/32")
+]
 
-export default function QuantTerminal() {
-  const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL" | "BURNER">("TERMINAL");
-  
-  const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 });
-  const [loading, setLoading] = useState(true);
-  const [currentTime, setCurrentTime] = useState<Date | null>(null);
-  const isFetching = useRef(false);
+# ============================================================
+# PYDANTIC SCHEMAS (HOISTED TO FIX CRASH LOOP)
+# ============================================================
+class KillSwitchPayload(BaseModel):
+    action: Literal["ACTIVATE", "DEACTIVATE"]
 
-  const [calcEquity, setCalcEquity] = useState<string>("250");
-  const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
-  const [calcEntry, setCalcEntry] = useState<string>("2350.00");
-  const [calcSL, setCalcSL] = useState<string>("2345.00");
+class TradeResolution(BaseModel):
+    secret_token: str
+    trade_id: str
+    outcome: Literal["WIN", "LOSS", "BREAKEVEN", "DROPPED", "SKIPPED"]
+    pnl_amount: Optional[float] = 0.0
 
-  const [pendingJournalTradeId, setPendingJournalTradeId] = useState<string | null>(null);
-  const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
-  const [journalText, setJournalText] = useState("");
-  const [journalHistory, setJournalHistory] = useState<any[]>([]);
-  const [pnlInput, setPnlInput] = useState<string>("0.00"); 
+class LayerResolution(BaseModel):
+    secret_token: str
+    layer_id: str
+    trade_id: str
+    layer_type: Literal["T1", "T2", "T3"]
+    outcome: Literal["HIT", "STOPPED_BE", "STOPPED_SL", "DROPPED"]
+    pnl_amount: Optional[float] = 0.0
 
-  useEffect(() => {
-    setCurrentTime(new Date());
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+class TradingViewPayload(BaseModel):
+    secret_token: str
+    ticker: str
+    timeframe: str = "Unknown"
+    # STRICT VALIDATION: Explicitly permitting Ghost Zone invalidations
+    action: Literal["BUY", "SELL", "BUY NOW", "SELL NOW", "INVALIDATED_ZONE", "EXECUTE"] = "EXECUTE"
+    timestamp: int = 0
+    score: float = 0.0
+    market_regime: str = "Unknown"
+    volume_delta: float = 0.0
+    magnet_node: float = 0.0
+    zone_high: float = 0.0
+    zone_low: float = 0.0
+    entry_price: float = 0.0
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
 
-  const fetchDashboardData = async () => {
-    if (isFetching.current) return;
-    isFetching.current = true;
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_tv_nulls(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ['magnet_node', 'volume_delta', 'market_regime']:
+                val = data.get(key)
+                if val is None:
+                    data[key] = 0.0 if key != 'market_regime' else "Unknown"
+                elif isinstance(val, str) and val.upper() == "NAN":
+                    data[key] = 0.0
+                elif isinstance(val, float) and math.isnan(val):
+                    data[key] = 0.0
+        return data
 
-    try {
-      const { data: configData, error: configError } = await supabase
-        .from("risk_configuration")
-        .select("total_equity, max_allowed_layers, system_is_killed")
-        .order("created_at", { ascending: false }).limit(1).single();
+    @model_validator(mode="after")
+    def validate_zone_geometry(self) -> "TradingViewPayload":
+        sl, tp, zh, zl = self.stop_loss, self.take_profit, self.zone_high, self.zone_low
+        # Skip validation bounds for invalidation coordinates
+        if self.action != "INVALIDATED_ZONE" and zh < zl:
+            raise ValueError("Invalid Boundaries")
+        return self
 
-      if (!configError && configData) setConfig(configData);
+# ============================================================
+# PHASE 3.1 & 3.3: KINETIC EVENT PROTOCOL (MACRO & STRIKE ENGINE)
+# ============================================================
+RED_FOLDER_SCHEDULE: list[dict[str, Any]] = []
 
-      // Hydrate relational trade_layers
-      const { data: queueData, error: queueError } = await supabase
-        .from("execution_queue")
-        .select(`
-          id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node, structure,
-          trade_layers ( id, trade_id, layer_type, risk_pct, target_price, stop_loss, status, realized_pnl )
-        `)
-        .order("created_at", { ascending: false }).limit(5);
+HIGH_IMPACT_KEYWORDS = [
+    "CPI", "NFP", "NON-FARM", "FOMC", "FEDERAL FUNDS RATE", 
+    "UNEMPLOYMENT RATE", "PPI", "RETAIL SALES"
+]
 
-      if (!queueError && queueData) setQueue(queueData as any);
+def get_event_thresholds(event_name: str) -> tuple[float, bool]:
+    """Maps macro event names to their required Delta threshold and directional logic."""
+    name_upper = event_name.upper()
+    if "CPI" in name_upper:
+        return 0.2, False
+    elif "NFP" in name_upper or "NON-FARM" in name_upper:
+        return 40.0, False
+    elif "UNEMPLOYMENT" in name_upper:
+        return 0.2, True  # Higher Unemployment = Weak USD = BUY Gold
+    elif "RETAIL SALES" in name_upper:
+        return 0.5, False
+    elif "PPI" in name_upper:
+        return 0.3, False
+    return 0.1, False
 
-      const { data: statsData, error: statsError } = await supabase
-        .from("execution_queue")
-        .select("status, realized_pnl")
-        .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
+async def execute_kinetic_delta_strike(event: dict[str, Any]):
+    """
+    Phase 3.3: High-Frequency News Worker using httpx.
+    Hibernates until T-10s, polls Finnhub every 500ms, calculates Delta deviation,
+    and executes an isolated $50 Burner execution payload.
+    """
+    event_name = event["event_name"]
+    target_time = event["target_time"]
+    forecast = float(event["forecast"]) if event.get("forecast") is not None else 0.0
+    threshold = float(event.get("threshold", 0.1))
+    reverse_logic = event.get("reverse_logic", False)
 
-      if (!statsError && statsData) {
-        const wins = statsData.filter(t => t.status === "WIN").length;
-        const losses = statsData.filter(t => t.status === "LOSS").length;
-        const total = statsData.length;
-        const totalPnL = statsData.reduce((sum, trade) => sum + (trade.realized_pnl || 0), 0);
-        
-        setAnalytics({
-          totalWins: wins,
-          totalLosses: losses,
-          winRate: total > 0 ? (wins / total) * 100 : 0,
-          netPnL: totalPnL
-        });
-      }
-      
-      if (activeTab === "JOURNAL") {
-        const { data: jData } = await supabase
-          .from("trade_journal")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(10);
-        if (jData) setJournalHistory(jData);
-      }
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    sleep_duration = (target_time - 10) - now_ts
 
-    } catch (err) {
-      console.error("Telemetry error:", err);
-    } finally {
-      setLoading(false);
-      isFetching.current = false;
-    }
-  };
+    # 1. Hibernation Check
+    if sleep_duration < -60:
+        logger.warning(f"KINETIC STRIKE SKIPPED: {event_name} is in the past (>60s elapsed).")
+        return
 
-  useEffect(() => {
-    fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 5000);
-    return () => clearInterval(interval);
-  }, [activeTab]);
+    if sleep_duration > 0:
+        logger.info(f"KINETIC STRIKE ARMED: {event_name}. Hibernating for {sleep_duration}s until T-10s.")
+        await asyncio.sleep(sleep_duration)
 
-  useEffect(() => {
-    if (config.total_equity) setCalcEquity(config.total_equity.toString());
-  }, [config.total_equity]);
+    logger.info(f"KINETIC STRIKE AWAKENED: Initiating 500ms polling cycle for {event_name}...")
 
-  const toggleKillSwitch = async () => {
-    const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
-    const actionText = currentAction === "ACTIVATE" ? "HALT" : "RESTORE";
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    url = f"https://finnhub.io/api/v1/economic-calendar?from={today_str}&to={today_str}&token={FINNHUB_API_KEY}"
+
+    # 2. Polling Loop using httpx.AsyncClient (80 cycles x 500ms = 40 seconds max lifespan)
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        for attempt in range(80):
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    events = data.get("economicCalendar", [])
+                    
+                    target_data = None
+                    for item in events:
+                        if item.get("event", "").upper() == event_name.upper():
+                            target_data = item
+                            break
+
+                    # 3. Condition Checking
+                    if target_data and target_data.get("actual") is not None:
+                        actual = float(target_data["actual"])
+                        delta = actual - forecast
+
+                        # Invalidation check: Abort if deviation is priced in
+                        if abs(delta) < threshold:
+                            logger.info(f"KINETIC STRIKE ABORT: {event_name} Delta ({delta:+.4f}) < Threshold (±{threshold}). PRICED IN.")
+                            return
+
+                        # Direction Logic
+                        if not reverse_logic:
+                            action = "SELL NOW" if delta > 0 else "BUY NOW"
+                        else:
+                            action = "BUY NOW" if delta > 0 else "SELL NOW"
+
+                        # Isolated $50 Burner Sizing (1.5 point SL cushion)
+                        burner_equity = 50.00
+                        sl_distance = 1.5
+                        pip_multiplier = 100.0
+                        lot_size = burner_equity / (sl_distance * pip_multiplier)
+
+                        logger.critical(
+                            f"🔥 [KINETIC STRIKE TRIGGERED] {event_name} | Action: {action} | "
+                            f"Actual: {actual} | Forecast: {forecast} | Delta: {delta:+.4f} | Size: {lot_size:.2f} Lots"
+                        )
+
+                        # Dispatch Telegram notification
+                        if TELEGRAM_CHAT_ID:
+                            bot = _get_bot()
+                            msg = (
+                                f"🔥 <b>KINETIC DELTA STRIKE EXECUTED</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"<b>EVENT</b>    : <code>{html.escape(event_name)}</code>\n"
+                                f"<b>ACTION</b>   : <code>{action} (XAUUSD)</code>\n"
+                                f"<b>ACTUAL</b>   : <code>{actual}</code> (Forecast: <code>{forecast}</code>)\n"
+                                f"<b>DELTA</b>    : <code>{delta:+.4f}</code> (Threshold: <code>±{threshold}</code>)\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"<b>BURNER SIZE</b> : <code>{lot_size:.2f} Lots</code> ($50.00 Max Risk)\n"
+                                f"<i>⚡ High-Frequency Kinetic Event Protocol</i>"
+                            )
+                            asyncio.create_task(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="HTML"))
+
+                        return  # Kill task immediately after execution
+
+            except Exception as e:
+                logger.error(f"Error polling Finnhub in strike loop: {str(e)}")
+
+            await asyncio.sleep(0.5)  # Enforce strict 500ms cadence
+
+    logger.warning(f"KINETIC STRIKE TIMEOUT: {event_name} actual data was not published within 40 seconds.")
+
+async def fetch_daily_macro_calendar():
+    """Queries Finnhub REST API for current day high-impact USD events, populates schedule, and spawns Strike Workers."""
+    global RED_FOLDER_SCHEDULE
+    if not FINNHUB_API_KEY:
+        logger.error("FINNHUB_API_KEY is missing from environment variables. Macro ingestion disabled.")
+        return
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    url = f"https://finnhub.io/api/v1/economic-calendar?from={today_str}&to={today_str}&token={FINNHUB_API_KEY}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            if response.status_code != 200:
+                logger.error(f"Finnhub API error ({response.status_code}): {response.text}")
+                return
+
+            data = response.json()
+            events = data.get("economicCalendar", [])
+            
+            new_schedule = []
+            for item in events:
+                country = item.get("country", "").upper()
+                event_name = item.get("event", "").upper()
+                impact = item.get("impact", "").lower()
+
+                is_usd = country in ["US", "USD"]
+                is_high_impact = impact == "high" or any(kw in event_name for kw in HIGH_IMPACT_KEYWORDS)
+
+                if is_usd and is_high_impact:
+                    time_str = item.get("time") # Format: "YYYY-MM-DD HH:MM:SS" (UTC)
+                    if not time_str:
+                        continue
+
+                    event_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    event_ts = int(event_dt.timestamp())
+                    
+                    # 20-Minute Embargo Window: T-15m to T+5m
+                    embargo_start_ts = event_ts - (15 * 60)
+                    embargo_end_ts = event_ts + (5 * 60)
+
+                    threshold, reverse_logic = get_event_thresholds(event_name)
+
+                    event_entry = {
+                        "event_id": f"{event_name.lower().replace(' ', '_')}_{event_ts}",
+                        "event_name": item.get("event"),
+                        "timestamp_utc": event_ts,
+                        "time_str": time_str,
+                        "forecast": item.get("estimate"),
+                        "previous": item.get("prev"),
+                        "actual": item.get("actual"),
+                        "unit": item.get("unit", ""),
+                        "embargo_start": embargo_start_ts,
+                        "embargo_end": embargo_end_ts,
+                        "processed": False
+                    }
+                    new_schedule.append(event_entry)
+
+                    # TASK SPAWNER: Launch Delta Strike Worker for upcoming events with forecast numbers
+                    if item.get("estimate") is not None:
+                        strike_payload = {
+                            "event_name": item.get("event"),
+                            "target_time": event_ts,
+                            "forecast": item.get("estimate"),
+                            "threshold": threshold,
+                            "reverse_logic": reverse_logic
+                        }
+                        asyncio.create_task(execute_kinetic_delta_strike(strike_payload))
+
+            RED_FOLDER_SCHEDULE = new_schedule
+            logger.info(f"Macro Ingestion Engine: Loaded {len(RED_FOLDER_SCHEDULE)} USD Red Folder events for {today_str}.")
+
+    except Exception as e:
+        logger.error(f"Failed to execute Finnhub macro ingestion: {str(e)}")
+
+async def macro_ingestion_worker():
+    """Background loop: Fetches macro schedule on startup, then sleeps until 00:01 UTC daily."""
+    logger.info("Macro Ingestion Background Worker initiated.")
+    await fetch_daily_macro_calendar()
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            tomorrow = now.date() + timedelta(days=1)
+            next_run = datetime(tomorrow.year, tomorrow.month, tomorrow.day, 0, 1, 0, tzinfo=timezone.utc)
+            sleep_seconds = (next_run - now).total_seconds()
+
+            logger.info(f"Macro Ingestion Worker sleeping for {sleep_seconds / 3600.0:.2f} hours until next 00:01 UTC cycle.")
+            await asyncio.sleep(sleep_seconds)
+            await fetch_daily_macro_calendar()
+
+        except asyncio.CancelledError:
+            logger.info("Macro Ingestion Worker gracefully cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Error in Macro Ingestion Worker loop: {str(e)}")
+            await asyncio.sleep(300)
+
+# ============================================================
+# PHASE 2.1: AUTOMATED 12-HOUR PAROLE WORKER
+# ============================================================
+async def automated_parole_worker():
+    """Checks every 5 minutes if a 12-hour kill switch penalty has expired and self-restores."""
+    logger.info("Automated 12-Hour Parole Worker initiated.")
+    while True:
+        try:
+            await asyncio.sleep(300)
+            async with AsyncSessionLocal() as session:
+                fetch_query = text("""
+                    SELECT id, system_is_killed, killed_at 
+                    FROM risk_configuration 
+                    ORDER BY id DESC LIMIT 1
+                """)
+                res = await session.execute(fetch_query)
+                config = res.fetchone()
+
+                if config and config.system_is_killed and config.killed_at:
+                    now = datetime.now(timezone.utc)
+                    killed_time = config.killed_at if config.killed_at.tzinfo else config.killed_at.replace(tzinfo=timezone.utc)
+                    elapsed_hours = (now - killed_time).total_seconds() / 3600.0
+
+                    if elapsed_hours >= 12.0:
+                        async with session.begin():
+                            restore_query = text("""
+                                UPDATE risk_configuration 
+                                SET system_is_killed = false, killed_at = NULL 
+                                WHERE id = :id
+                            """)
+                            await session.execute(restore_query, {"id": config.id})
+                        
+                        logger.info(f"12-Hour Parole satisfied (Elapsed: {elapsed_hours:.2f}h). System restored.")
+                        await broadcast_parole_restoration()
+
+        except asyncio.CancelledError:
+            logger.info("Parole worker background loop cancelled gracefully.")
+            break
+        except Exception as e:
+            logger.error(f"Error in parole worker execution cycle: {str(e)}")
+
+# ============================================================
+# PHASE 4: GHOST ZONE MEMORY (INVERTED BREAKER CORTEX)
+# ============================================================
+async def process_invalidated_zone(payload: TradingViewPayload):
+    """
+    Parses breached order blocks, inverts their transactional polarity,
+    and stores them inside the database cortex as structural Breakers.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                if payload.entry_price < payload.zone_low:
+                    original_type = "BULLISH"
+                    breaker_type = "BEARISH"
+                else:
+                    original_type = "BEARISH"
+                    breaker_type = "BULLISH"
+                
+                # FIXED: Mapped spatial coordinates to breaker_high/breaker_low and defaulted is_active to true
+                query = text("""
+                    INSERT INTO ghost_zones (ticker, timeframe, breaker_high, breaker_low, original_type, breaker_type, invalidated_at, is_active)
+                    VALUES (:ticker, :timeframe, :breaker_high, :breaker_low, :original_type, :breaker_type, NOW(), true)
+                """)
+                
+                await session.execute(query, {
+                    "ticker": payload.ticker,
+                    "timeframe": payload.timeframe,
+                    "breaker_high": payload.zone_high,
+                    "breaker_low": payload.zone_low,
+                    "original_type": original_type,
+                    "breaker_type": breaker_type
+                })
+                
+                logger.info(
+                    f"👻 [Ghost Zone Activated] {payload.ticker} {payload.timeframe} | "
+                    f"Original Polarity: {original_type} -> Breaker Polarity: {breaker_type} | "
+                    f"Coordinates: {payload.zone_low:.2f} - {payload.zone_high:.2f}"
+                )
+    except Exception as e:
+        logger.error(f"Fatal error routing invalidation payload to ghost_zones: {str(e)}")
+
+# ============================================================
+# FASTAPI LIFESPAN MANAGEMENT
+# ============================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    parole_task = asyncio.create_task(automated_parole_worker())
+    macro_ingestion_task = asyncio.create_task(macro_ingestion_worker())
     
-    const adminKey = window.prompt(`[AUTHORIZATION REQUIRED]\n\nEnter Webhook Secret Token to ${actionText} system:`);
-    if (!adminKey) return; 
+    yield
+    
+    parole_task.cancel()
+    macro_ingestion_task.cancel()
+    try:
+        await asyncio.gather(parole_task, macro_ingestion_task, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass
 
-    try {
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/kill-switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
-        body: JSON.stringify({ action: currentAction })
-      });
-      if (res.ok) alert(`Command accepted. System ${currentAction}D.`);
-      else alert("Command rejected. Invalid Token.");
-    } catch (err) {
-      alert("Fatal: Could not reach Railway backend.");
-    }
-  };
+# ============================================================
+# SECURITY & AUTHENTICATION HELPERS
+# ============================================================
+def is_ip_allowed(ip_str: str) -> bool:
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+        return any(ip_obj in network for network in TRADINGVIEW_IPS)
+    except ValueError:
+        return False
 
-  const equityNum = parseFloat(calcEquity) || 0;
-  const riskPctNum = parseFloat(calcRiskPct) || 0;
-  const entryNum = parseFloat(calcEntry) || 0;
-  const slNum = parseFloat(calcSL) || 0;
-  const riskAmount = equityNum * (riskPctNum / 100);
-  const slDistance = Math.abs(entryNum - slNum);
-  const pipValuePerLot = 100;
-  const lotSize = slDistance > 0 ? (riskAmount / (slDistance * pipValuePerLot)) : 0;
+async def verify_admin_key(request: Request):
+    key = request.headers.get("X-Admin-Key")
+    if key != WEBHOOK_SECRET_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid Secret Token")
+    return key
 
-  const resolveSingleLayer = async (
-    layerId: string, 
-    tradeId: string, 
-    layerType: "T1" | "T2" | "T3", 
-    outcome: "HIT" | "STOPPED_BE" | "STOPPED_SL" | "DROPPED",
-    pnl: number
-  ) => {
-    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
-    if (!secret) {
-      secret = window.prompt("Enter Webhook Secret Token to authenticate:");
-      if (!secret) return;
-      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
-    }
+# ============================================================
+# FASTAPI APPLICATION & MIDDLEWARE
+# ============================================================
+app = FastAPI(title="Neural Nexus Middleware", version="3.7.0", lifespan=lifespan)
 
-    try {
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/resolve-layer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          secret_token: secret,
-          layer_id: layerId,
-          trade_id: tradeId,
-          layer_type: layerType,
-          outcome: outcome,
-          pnl_amount: pnl
-        })
-      });
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://mhdsyz1.github.io"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-      if (res.ok) {
-        fetchDashboardData();
-      } else {
-        alert("Layer resolution failed.");
-      }
-    } catch (err) {
-      alert("Network error.");
-    }
-  };
-
-  const resolveTrade = (id: string, outcome: "WIN" | "LOSS" | "BREAKEVEN" | "DROPPED") => {
-    let vaultSecret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
-    if (!vaultSecret) {
-      vaultSecret = window.prompt("Enter Webhook Secret Token to authenticate:");
-      if (!vaultSecret) return;
-      localStorage.setItem("NEXUS_WEBHOOK_SECRET", vaultSecret);
-    }
-
-    if (outcome === "DROPPED") {
-      executeAtomicResolution(id, outcome, "Setup dropped. Did not execute.", vaultSecret);
-      return;
-    }
-
-    setPendingJournalTradeId(id);
-    setPendingOutcome(outcome);
-  };
-
-  const executeAtomicResolution = async (id: string, outcome: string, journalEntry: string, secret: string) => {
-    try {
-      setQueue(prev => prev.map(item => item.id === id ? { ...item, status: outcome } : item));
-
-      const { error: dbError } = await supabase.from("trade_journal").insert({
-        trade_id: id,
-        reason_for_entry: journalEntry
-      });
-
-      if (dbError) {
-        alert(`Database Rejected Entry: ${dbError.message}`);
-        setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
-        return;
-      }
-
-      const res = await fetch("https://nexus-neural-machine-backend-production.up.railway.app/resolve-trade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          secret_token: secret,
-          trade_id: id,
-          outcome: outcome,
-          pnl_amount: parseFloat(pnlInput) || 0 
-        })
-      });
-
-      if (!res.ok) {
-        if (res.status === 401 || res.status === 403) localStorage.removeItem("NEXUS_WEBHOOK_SECRET");
-        setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item)); 
-        alert("Execution failed at API layer.");
-        return;
-      }
-
-      setPendingJournalTradeId(null);
-      setPendingOutcome(null);
-      setJournalText("");
-      setPnlInput("0.00");
-      fetchDashboardData();
-
-    } catch (err) {
-      alert("Fatal: Network error reaching backend.");
-      setQueue(prev => prev.map(item => item.id === id ? { ...item, status: "PENDING" } : item));
-    }
-  };
-
-  const submitJournal = () => {
-    if (!pendingJournalTradeId || !pendingOutcome || !journalText.trim()) return;
-    const secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
-    executeAtomicResolution(pendingJournalTradeId, pendingOutcome, journalText, secret!);
-  };
-
-  const calculateSignalLots = (equity: number, riskPct: number, zoneLow?: number, zoneHigh?: number, sl?: number) => {
-    if (!zoneLow || !zoneHigh || !sl) return 0;
-    const midZone = (zoneLow + zoneHigh) / 2;
-    const distance = Math.abs(midZone - sl);
-    if (distance === 0) return 0;
-    return (equity * riskPct) / (distance * 100); 
-  };
-
-  return (
-    <div className="flex flex-col h-dvh overflow-hidden bg-background text-foreground font-mono relative">
-      
-      {/* MODAL OVERLAY: FORCED CONTEXT JOURNALING */}
-      {pendingJournalTradeId && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-sm">
-            <div className="bg-zinc-950 border border-border/50 rounded-xl p-5 w-full max-w-md shadow-2xl flex flex-col gap-4">
-                <div className="border-b border-border/50 pb-3">
-                    <h3 className="text-lg font-bold text-primary tracking-wider uppercase">Log Trade Context</h3>
-                    <p className="text-xs text-muted-foreground mt-1">Why did you execute this setup?</p>
-                </div>
-
-                {(pendingOutcome === "WIN" || pendingOutcome === "LOSS") && (
-                  <div className="flex flex-col gap-1.5 pb-2">
-                    <label className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Realized PnL ($)</label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      className="w-full p-2 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm text-foreground"
-                      placeholder={pendingOutcome === "WIN" ? "+15.50" : "-5.00"}
-                      value={pnlInput}
-                      onChange={(e) => setPnlInput(e.target.value)}
-                    />
-                  </div>
-                )}
-
-                <textarea 
-                    className="w-full h-32 p-3 bg-zinc-900 border border-border/50 rounded-lg focus:ring-1 focus:ring-primary outline-none text-sm resize-none text-foreground"
-                    placeholder="e.g., M5 orderblock tap aligned with H1 bullish trend."
-                    value={journalText}
-                    onChange={(e) => setJournalText(e.target.value)}
-                />
-                <div className="flex gap-2 pt-2">
-                    <Button variant="ghost" className="flex-1 border border-border/50 text-xs tracking-wider" onClick={() => { setPendingJournalTradeId(null); setPendingOutcome(null); }}>SKIP</Button>
-                    <Button className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold tracking-wider" onClick={submitJournal}>SAVE ENTRY</Button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* TOP STATUS BAR */}
-      <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0 shadow-sm">
-        <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600 animate-none" : "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"}`} />
-          <h1 className="text-sm font-bold tracking-widest uppercase text-primary">
-            {config.system_is_killed ? "SYSTEM HALTED" : "NEXUS LIVE"}
-          </h1>
-        </div>
-        <div className="text-sm font-bold text-muted-foreground bg-secondary/50 px-3 py-1 rounded-md border border-border/50">
-          {currentTime ? currentTime.toLocaleTimeString('en-SG', { hour12: false }) : "--:--:--"}
-        </div>
-      </header>
-
-      {/* MAIN CANVAS */}
-      <main className="flex-1 overflow-y-auto p-4 pb-24">
+@app.middleware("http")
+async def enforce_ip_whitelist(request: Request, call_next):
+    # FIXED: Extract Real IP through Railway's Reverse Proxy
+    if request.url.path == "/webhook":
+        forwarded_for = request.headers.get("x-forwarded-for")
         
-        {/* TERMINAL */}
-        {activeTab === "TERMINAL" && (
-          <div className="flex flex-col gap-4 h-full">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
-                <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
-              </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
-                <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
-              </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Wins</span>
-                <span className="text-lg font-bold text-foreground">{analytics.totalWins}</span>
-              </div>
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Total Losses</span>
-                <span className="text-lg font-bold text-rose-400">{analytics.totalLosses}</span>
-              </div>
-              <div className="col-span-2 p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Net PnL</span>
-                <span className={`text-lg font-bold ${analytics.netPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                  ${analytics.netPnL.toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
-              <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-3">
-                <Target size={14} className="text-primary" />
-                <h3 className="text-xs text-muted-foreground uppercase tracking-wider">Execution Queue</h3>
-              </div>
-              
-              <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
-                {loading ? (
-                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Syncing Ledger...</div>
-                ) : queue.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-6">Queue clear. No pending setups.</div>
-                ) : (
-                  queue.map((item) => {
-                    const isPending = item.status === "PENDING";
-
-                    return (
-                      <div key={item.id} className={`p-3 border rounded-lg text-xs shadow-sm flex flex-col gap-3 transition-colors ${isPending ? "bg-zinc-950 border-primary/30" : "bg-background border-border/40 opacity-75"}`}>
-                        <div className="flex justify-between items-center">
-                          <span className={`font-bold text-sm ${item.action === "BUY" ? "text-emerald-500" : "text-rose-500"}`}>
-                            {item.action} {item.ticker}
-                          </span>
-                          <span className="text-muted-foreground text-[10px]">{new Date(item.created_at).toLocaleTimeString([], { hour12: false })}</span>
-                        </div>
-
-                        {isPending && item.zone_low && (
-                          <div className="bg-background/50 p-3 rounded-md border border-border/30 flex flex-col gap-2">
-                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
-                              <span className="text-muted-foreground text-[10px] uppercase">Entry Zone</span>
-                              <span className="font-bold">{item.zone_low.toFixed(2)} - {item.zone_high?.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
-                              <span className="text-muted-foreground text-[10px] uppercase">Stop Loss</span>
-                              <span className="font-bold text-rose-400">{item.stop_loss?.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-border/30 pb-1">
-                              <span className="text-muted-foreground text-[10px] uppercase">Take Profit</span>
-                              <span className="font-bold text-emerald-400">{item.take_profit?.toFixed(2)}</span>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* PHASE 2.2: MULTI-TRANCHE RUNNER MATRIX UI */}
-                        {item.trade_layers && item.trade_layers.length > 0 && (
-                          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-border/30">
-                            {item.trade_layers.sort((a,b) => a.layer_type.localeCompare(b.layer_type)).map((layer) => {
-                              const layerPending = layer.status === "PENDING";
-                              const layerLot = calculateSignalLots(config.total_equity, layer.risk_pct, item.zone_low, item.zone_high, item.stop_loss);
-
-                              return (
-                                <div key={layer.id} className="bg-zinc-900/80 p-2 rounded-lg border border-border/40 flex flex-col gap-1.5">
-                                  <div className="flex justify-between items-center">
-                                    <span className="font-bold text-[10px] text-primary">{layer.layer_type} ({Math.round(layer.risk_pct * 100)}%)</span>
-                                    <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
-                                      layer.status === "HIT" ? "bg-emerald-500/20 text-emerald-400" :
-                                      layer.status === "STOPPED_SL" ? "bg-rose-500/20 text-rose-400" :
-                                      layer.status === "STOPPED_BE" ? "bg-amber-500/20 text-amber-400" :
-                                      "bg-zinc-800 text-muted-foreground"
-                                    }`}>
-                                      {layer.status}
-                                    </span>
-                                  </div>
-
-                                  <div className="text-[10px] font-bold text-foreground flex justify-between">
-                                    <span className="text-muted-foreground text-[8px]">Size:</span>
-                                    <span>{layerLot.toFixed(2)} Lots</span>
-                                  </div>
-
-                                  {layerPending && item.status === "PENDING" && (
-                                    <div className="grid grid-cols-2 gap-1 pt-1">
-                                      <Button 
-                                        size="sm" 
-                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "HIT", 15.00)} 
-                                        className="h-5 text-[8px] bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 p-0 font-bold"
-                                      >
-                                        HIT
-                                      </Button>
-                                      <Button 
-                                        size="sm" 
-                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "STOPPED_BE", 0.00)} 
-                                        className="h-5 text-[8px] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 p-0 font-bold"
-                                      >
-                                        BE
-                                      </Button>
-                                      <Button 
-                                        size="sm" 
-                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "STOPPED_SL", -5.00)} 
-                                        className="h-5 text-[8px] bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 p-0 font-bold"
-                                      >
-                                        SL
-                                      </Button>
-                                      <Button 
-                                        size="sm" 
-                                        onClick={() => resolveSingleLayer(layer.id, item.id, layer.layer_type, "DROPPED", 0.00)} 
-                                        variant="ghost" 
-                                        className="h-5 text-[8px] text-muted-foreground p-0 font-bold border border-border/40"
-                                      >
-                                        DROP
-                                      </Button>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {isPending && (
-                          <div className="grid grid-cols-4 gap-1.5 mt-1">
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "WIN")} className="h-8 text-[10px] bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-emerald-500/20">ALL WIN</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "LOSS")} className="h-8 text-[10px] bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 font-bold border border-rose-500/20">ALL SL</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "BREAKEVEN")} className="h-8 text-[10px] bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20 font-bold border border-zinc-500/20">ALL BE</Button>
-                            <Button size="sm" onClick={() => resolveTrade(item.id, "DROPPED")} variant="ghost" className="h-8 text-[10px] text-muted-foreground hover:text-foreground font-bold border border-border/50">DROP</Button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* TELEMETRY MATRIX HUD */}
-            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner min-h-80 relative overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between p-3 border-b border-border/30 bg-zinc-900/50">
-                <div className="flex items-center gap-2">
-                  <Activity size={14} className="text-primary" />
-                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Quant Telemetry Matrix</h3>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span className="text-[9px] text-emerald-500 font-bold uppercase tracking-widest">Live Sync</span>
-                </div>
-              </div>
-              
-              <div className="p-4 grid grid-cols-2 gap-3 flex-1 content-start">
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Market Regime</span>
-                  <span className={`text-sm font-bold ${queue[0]?.market_regime === "TRENDING" ? "text-cyan-400" : queue[0]?.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
-                    {queue[0]?.market_regime || "AWAITING DATA"}
-                  </span>
-                </div>
-                
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Structure</span>
-                  <span className="text-sm font-bold text-foreground">
-                    {queue[0]?.structure || "NEUTRAL"}
-                  </span>
-                </div>
-
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Footprint Delta</span>
-                  <span className={`text-sm font-bold ${Number(queue[0]?.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                    {queue[0]?.volume_delta ? Number(queue[0].volume_delta).toLocaleString() : "0"}
-                  </span>
-                </div>
-
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Inst. Magnet</span>
-                  <span className="text-sm font-bold text-amber-400">
-                    ${queue[0]?.magnet_node?.toFixed(2) || "0.00"}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* JOURNAL */}
-        {activeTab === "JOURNAL" && (
-          <div className="flex flex-col gap-4 h-full">
-            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
-                <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-4">
-                    <BookText size={16} className="text-primary" />
-                    <h3 className="text-xs font-bold text-primary uppercase tracking-wider">Trading Journal Logs</h3>
-                </div>
-                
-                <div className="space-y-4">
-                    {journalHistory.length === 0 ? (
-                        <div className="text-xs text-muted-foreground text-center py-6">No journal entries found. Execute a trade to log context.</div>
-                    ) : (
-                        journalHistory.map((log) => (
-                            <div key={log.id} className="p-3 bg-zinc-900/50 border border-border/50 rounded-lg flex flex-col gap-2">
-                                <div className="text-[10px] text-muted-foreground flex justify-between items-center border-b border-border/20 pb-1">
-                                    <span>Log ID: {String(log.id).split("-")[0]}</span>
-                                    <span>{new Date(log.created_at).toLocaleDateString()}</span>
-                                </div>
-                                <p className="text-xs text-foreground mt-1 leading-relaxed">{log.reason_for_entry}</p>
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-          </div>
-        )}
-
-        {/* CALCULATOR */}
-        {activeTab === "CALCULATOR" && (
-          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
-            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3 font-mono">XAUUSD Position Sizer</h3>
-            <div className="space-y-5 text-sm font-mono">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-muted-foreground font-semibold">Account Equity ($)</label>
-                <input type="number" value={calcEquity} onChange={(e) => setCalcEquity(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-muted-foreground font-semibold">Risk Percentage (%)</label>
-                <input type="number" step="0.1" value={calcRiskPct} onChange={(e) => setCalcRiskPct(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-muted-foreground font-semibold">Entry Price</label>
-                  <input type="number" step="0.01" value={calcEntry} onChange={(e) => setCalcEntry(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-muted-foreground font-semibold">Stop Loss</label>
-                  <input type="number" step="0.01" value={calcSL} onChange={(e) => setCalcSL(e.target.value)} className="w-full text-base p-3 bg-background border border-border/50 rounded-lg focus:ring-2 focus:ring-primary outline-none text-foreground" />
-                </div>
-              </div>
-
-              {lotSize > 0 ? (
-                <div className="mt-6 p-5 bg-background border border-border/50 rounded-xl space-y-3 shadow-inner">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-xs uppercase tracking-wider">Capital at Risk</span>
-                    <span className="font-bold text-destructive">${riskAmount.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-xs uppercase tracking-wider">SL Distance</span>
-                    <span className="font-bold">{slDistance.toFixed(2)} pts</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-border/50 pt-3 mt-3">
-                    <span className="text-muted-foreground font-bold uppercase tracking-wider">Execute Size</span>
-                    <span className="font-bold text-emerald-500 text-2xl">{lotSize.toFixed(2)} Lots</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center text-xs text-muted-foreground bg-background p-4 border border-dashed border-border/50 rounded-xl mt-4">
-                  Enter valid metrics to calculate size.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* CONTROLS */}
-        {activeTab === "CONTROLS" && (
-          <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-6">
-            <div>
-              <h3 className="text-lg font-bold text-primary border-b border-border/50 pb-3 mb-2">Admin Overrides</h3>
-              <p className="text-xs text-muted-foreground">Require master API key authorization to execute.</p>
-            </div>
+        if forwarded_for:
+            # Railway appends multiple proxy IPs, extract the initial client IP
+            client_ip = forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.client.host
             
-            <div className="p-4 border border-red-900/30 bg-red-950/10 rounded-xl">
-              <Button 
-                onClick={toggleKillSwitch}
-                size="lg"
-                variant={config.system_is_killed ? "default" : "destructive"} 
-                className={`w-full font-bold tracking-wider uppercase transition-colors ${config.system_is_killed ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}`}
-              >
-                {config.system_is_killed ? "RESTORE SYSTEM" : "ACTIVATE KILL SWITCH"}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* BURNER */}
-        {activeTab === "BURNER" && (
-          <div className="flex flex-col gap-4 h-full">
-            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-2">
-                <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-2">
-                    <Flame size={16} className="text-orange-500" />
-                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider">Kinetic Event Protocol</h3>
-                </div>
-                <div className="p-3 border border-orange-900/30 bg-orange-950/10 rounded-lg flex justify-between items-center">
-                    <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Burner Equity</span>
-                    <span className="text-lg font-bold text-foreground">$50.00</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-                  Isolated full-margin execution sandbox.
-                </p>
-            </div>
+        if not is_ip_allowed(client_ip) and client_ip not in ["127.0.0.1", "testclient"]:
+            logger.warning(f"Unauthorized IP rejected: {client_ip}")
+            return JSONResponse(status_code=403, content={"detail": "Access Denied / Unauthorized Origin"})
             
-            <div className="flex-1 border-2 border-orange-900/20 border-dashed rounded-xl bg-zinc-950/30 flex flex-col items-center justify-center text-muted-foreground shadow-inner min-h-80">
-              <span className="text-xs uppercase tracking-widest font-bold text-orange-900/50">Module Offline</span>
-            </div>
-          </div>
-        )}
-      </main>
+    return await call_next(request)
 
-      {/* BOTTOM NAV */}
-      <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0 z-40">
-        <div className="flex justify-around items-center h-16 max-w-md mx-auto px-2">
-          <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <Activity size={20} strokeWidth={activeTab === "TERMINAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Terminal</span>
-          </button>
-          
-          <button onClick={() => setActiveTab("JOURNAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "JOURNAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <BookText size={20} strokeWidth={activeTab === "JOURNAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Journal</span>
-          </button>
+# ============================================================
+# BACKGROUND PIPELINES & ROUTES
+# ============================================================
+async def background_execution_pipeline(payload: TradingViewPayload):
+    try:
+        engine_res = await process_engine_state(payload)
+        if engine_res.is_blocked:
+            logger.warning(f"Engine blocked execution for {payload.ticker}. Kill switch is ACTIVE.")
+            return
+        await broadcast_trade(payload, engine_res)
+    except Exception as e:
+        logger.error(f"Fatal handling error in background pipeline: {str(e)}")
 
-          <button onClick={() => setActiveTab("CALCULATOR")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CALCULATOR" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <Calculator size={20} strokeWidth={activeTab === "CALCULATOR" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Sizer</span>
-          </button>
+@app.get("/api/macro-schedule", status_code=status.HTTP_200_OK)
+async def get_macro_schedule(admin_key: str = Depends(verify_admin_key)):
+    """Returns the live in-memory Red Folder schedule for today."""
+    return {
+        "status": "success",
+        "event_count": len(RED_FOLDER_SCHEDULE),
+        "schedule": RED_FOLDER_SCHEDULE
+    }
 
-          <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <ShieldAlert size={20} strokeWidth={activeTab === "CONTROLS" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Controls</span>
-          </button>
+@app.post("/api/resolve-layer", status_code=status.HTTP_200_OK)
+async def resolve_layer(payload: LayerResolution):
+    if payload.secret_token != WEBHOOK_SECRET_TOKEN:
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
-          <button onClick={() => setActiveTab("BURNER")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "BURNER" ? "text-orange-500" : "text-muted-foreground hover:text-orange-500/70"}`}>
-            <Flame size={20} strokeWidth={activeTab === "BURNER" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Burner</span>
-          </button>
-        </div>
-      </nav>
-    </div>
-  );
-}
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                update_layer = text("""
+                    UPDATE trade_layers 
+                    SET status = :outcome, realized_pnl = :pnl, closed_at = NOW() 
+                    WHERE id = :layer_id
+                """)
+                await session.execute(update_layer, {
+                    "outcome": payload.outcome, 
+                    "pnl": payload.pnl_amount, 
+                    "layer_id": payload.layer_id
+                })
+
+                fetch_all = text("SELECT status, realized_pnl FROM trade_layers WHERE trade_id = :trade_id")
+                res = await session.execute(fetch_all, {"trade_id": payload.trade_id})
+                layers = res.fetchall()
+
+                all_closed = all(l[0] != 'PENDING' for l in layers)
+
+                if all_closed:
+                    total_pnl = sum(float(l[1] or 0.0) for l in layers)
+                    statuses = [l[0] for l in layers]
+
+                    if all(s == 'STOPPED_SL' for s in statuses):
+                        parent_status = "LOSS"
+                    elif any(s == 'HIT' for s in statuses):
+                        parent_status = "WIN"
+                    elif all(s in ['STOPPED_BE', 'DROPPED'] for s in statuses):
+                        parent_status = "BREAKEVEN" if any(s == 'STOPPED_BE' for s in statuses) else "DROPPED"
+                    else:
+                        parent_status = "WIN" if total_pnl > 0 else "LOSS" if total_pnl < 0 else "BREAKEVEN"
+
+                    update_parent = text("""
+                        UPDATE execution_queue 
+                        SET status = :status, realized_pnl = :pnl, processed_at = NOW() 
+                        WHERE id = :trade_id
+                    """)
+                    await session.execute(update_parent, {
+                        "status": parent_status, 
+                        "pnl": total_pnl, 
+                        "trade_id": payload.trade_id
+                    })
+
+                    if parent_status == "LOSS":
+                        fetch_recent = text("""
+                            SELECT status FROM execution_queue 
+                            WHERE status IN ('WIN', 'LOSS', 'BREAKEVEN') 
+                            ORDER BY created_at DESC LIMIT 2
+                        """)
+                        recent_res = await session.execute(fetch_recent)
+                        recent_trades = recent_res.fetchall()
+
+                        if len(recent_trades) == 2 and recent_trades[0][0] == "LOSS" and recent_trades[1][0] == "LOSS":
+                            kill_query = text("""
+                                UPDATE risk_configuration 
+                                SET system_is_killed = true, killed_at = NOW() 
+                                WHERE id IN (
+                                    SELECT id FROM risk_configuration ORDER BY id DESC LIMIT 1
+                                )
+                            """)
+                            await session.execute(kill_query)
+                            logger.warning("DISCIPLINE ENGINE: Two consecutive losses recorded. System HALTED for 12 hours.")
+
+        return {"status": "success", "all_closed": all_closed}
+    except Exception as e:
+        logger.error(f"Layer resolution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Layer resolution failed.")
+
+@app.post("/api/resolve-trade", status_code=status.HTTP_200_OK)
+async def resolve_trade(payload: TradeResolution):
+    if payload.secret_token != WEBHOOK_SECRET_TOKEN:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                update_query = text("UPDATE execution_queue SET status = :outcome, realized_pnl = :pnl WHERE id = :trade_id")
+                await session.execute(update_query, {"outcome": payload.outcome, "pnl": payload.pnl_amount, "trade_id": payload.trade_id})
+                
+                update_child_layers = text("""
+                    UPDATE trade_layers 
+                    SET status = CASE 
+                        WHEN :outcome = 'WIN' THEN 'HIT' 
+                        WHEN :outcome = 'LOSS' THEN 'STOPPED_SL' 
+                        WHEN :outcome = 'BREAKEVEN' THEN 'STOPPED_BE' 
+                        ELSE 'DROPPED' END,
+                        closed_at = NOW()
+                    WHERE trade_id = :trade_id AND status = 'PENDING'
+                """)
+                await session.execute(update_child_layers, {"outcome": payload.outcome, "trade_id": payload.trade_id})
+
+                if payload.outcome == "LOSS":
+                    fetch_query = text("""
+                        SELECT status FROM execution_queue 
+                        WHERE status IN ('WIN', 'LOSS', 'BREAKEVEN') 
+                        ORDER BY created_at DESC LIMIT 2
+                    """)
+                    res = await session.execute(fetch_query)
+                    recent_trades = res.fetchall()
+                    
+                    if len(recent_trades) == 2 and recent_trades[0][0] == "LOSS" and recent_trades[1][0] == "LOSS":
+                        kill_query = text("""
+                            UPDATE risk_configuration 
+                            SET system_is_killed = true, killed_at = NOW() 
+                            WHERE id IN (
+                                SELECT id FROM risk_configuration ORDER BY id DESC LIMIT 1
+                            )
+                        """)
+                        await session.execute(kill_query)
+                        logger.warning("SYSTEM KILLED: Two consecutive losses recorded. Stamp set for 12-hour parole.")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Backend execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Backend execution failed.")
+
+@app.post("/api/kill-switch", status_code=status.HTTP_200_OK)
+async def admin_kill_switch(payload: KillSwitchPayload, admin_key: str = Depends(verify_admin_key)):
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                kill_status = True if payload.action == "ACTIVATE" else False
+                update_query = text("""
+                    UPDATE risk_configuration 
+                    SET system_is_killed = :status,
+                        killed_at = CASE WHEN :status = true THEN NOW() ELSE NULL END 
+                    WHERE id IN (
+                        SELECT id FROM risk_configuration ORDER BY id DESC LIMIT 1
+                    )
+                """)
+                await session.execute(update_query, {"status": kill_status})
+        return {"status": "success", "message": f"System Kill Switch set to {kill_status}"}
+    except Exception as e:
+        logger.error(f"Failed to execute kill switch: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database update failed.")
+
+def is_macro_embargo_active() -> tuple[bool, Optional[str]]:
+    """Checks if current time falls within any active event embargo window (T-15m to T+5m)."""
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    for event in RED_FOLDER_SCHEDULE:
+        if event["embargo_start"] <= now_ts <= event["embargo_end"]:
+            return True, event["event_name"]
+    return False, None
+
+@app.post("/webhook", status_code=status.HTTP_202_ACCEPTED)
+async def handle_inbound_alert(payload: TradingViewPayload, background_tasks: BackgroundTasks):
+    # 0. Authenticate Webhook
+    if payload.secret_token != WEBHOOK_SECRET_TOKEN:
+        return JSONResponse(status_code=401, content={"detail": "Invalid Token."})
+
+    # 1. INTERCEPT: Handle Invalidation Events
+    if payload.action == "INVALIDATED_ZONE":
+        background_tasks.add_task(process_invalidated_zone, payload)
+        return {"status": "success", "detail": "Invalidation event routed to Ghost Cortex."}
+
+    # 2. PHASE 3.2: PRE-EVENT EMBARGO SHIELD
+    is_embargoed, active_event = is_macro_embargo_active()
+    if is_embargoed:
+        logger.warning(f"EMBARGO SHIELD ACTIVE: Dropped SMC webhook for {payload.ticker} during high-impact news ({active_event}).")
+        return JSONResponse(
+            status_code=423, 
+            content={"detail": f"Macro Embargo Active: {active_event}. Main execution queue shielded."}
+        )
+
+    # 3. Catch Pre-Alerts (-1), broadcast to Telegram, then DROP before DB insertion
+    if payload.score == -1:
+        from trading_state import EngineContextResult
+        dummy_context = EngineContextResult("", 0, False, 250.0, 0.02, 0.04, 0.06)
+        background_tasks.add_task(broadcast_trade, payload, dummy_context)
+        return JSONResponse(status_code=202, content={"detail": "Squeeze pre-alert routed to Telegram only."})
+
+    # 4. Reject weak setups
+    if payload.score is not None and payload.score >= 0 and payload.score < MIN_SIGNAL_SCORE:
+        return JSONResponse(status_code=406, content={"detail": "Signal score below threshold."})
+
+    # ============================================================
+    # PHASE 5: STATISTICAL PROBABILITY EDGE SCORING (Supabase RPC)
+    # ============================================================
+    try:
+        async with AsyncSessionLocal() as session:
+            rpc_query = text("""
+                SELECT calculate_dynamic_edge_score(:regime, :delta)
+            """)
+            res = await session.execute(rpc_query, {
+                "regime": payload.market_regime,
+                "delta": payload.volume_delta
+            })
+            historical_edge_score = res.scalar()
+
+            # Fallback to payload score if RPC returns null or hasn't accumulated enough historical data yet
+            if historical_edge_score is not None:
+                logger.info(f"📊 PHASE 5 EDGE SCORE EVALUATION: {payload.ticker} scored {historical_edge_score}/100 via Supabase RPC stats.")
+                
+                # Hard override: Reject signals where historical probability drops below personal threshold
+                if historical_edge_score < MIN_SIGNAL_SCORE:
+                    return JSONResponse(
+                        status_code=406,
+                        content={"detail": f"Statistical Edge Rejection: Historical confidence score ({historical_edge_score}) is below required threshold."}
+                    )
+            else:
+                logger.info(f"📊 PHASE 5: Insufficient historical data for regime '{payload.market_regime}' and delta '{payload.volume_delta}'. Falling back to local score: {payload.score}")
+                if payload.score < MIN_SIGNAL_SCORE:
+                    return JSONResponse(
+                        status_code=406,
+                        content={"detail": "Signal score below threshold."}
+                    )
+    except Exception as e:
+        logger.error(f"Error evaluating Phase 5 statistical edge score via RPC: {str(e)}")
+        # Graceful fallback to static score check if database function fails
+        if payload.score < MIN_SIGNAL_SCORE:
+            return JSONResponse(
+                status_code=406,
+                content={"detail": "Signal score below threshold."}
+            )
+
+    # 5. PHASE 4: CASCADE INDUCEMENT TRACKER (Liquidity Trap Prevention)
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                # Query matching pending zones within a tight dynamic ±2.0 point boundary
+                spatial_check_query = text("""
+                    SELECT id, touch_count FROM execution_queue
+                    WHERE ticker = :ticker AND status = 'PENDING'
+                    AND ABS(zone_high - :zone_high) <= 2.0
+                    AND ABS(zone_low - :zone_low) <= 2.0
+                    ORDER BY created_at DESC LIMIT 1
+                """)
+                res = await session.execute(spatial_check_query, {
+                    "ticker": payload.ticker,
+                    "zone_high": payload.zone_high,
+                    "zone_low": payload.zone_low
+                })
+                existing_zone = res.fetchone()
+
+                if existing_zone:
+                    zone_id, current_touches = existing_zone
+                    new_touches = current_touches + 1
+
+                    # Commit incremented touch count to state machine DB
+                    update_touches = text("""
+                        UPDATE execution_queue
+                        SET touch_count = :new_touches
+                        WHERE id = :zone_id
+                    """)
+                    await session.execute(update_touches, {
+                        "new_touches": new_touches,
+                        "zone_id": zone_id
+                    })
+
+                    logger.info(f"⚡ Spatial overlap found for {payload.ticker}. Incrementing touch count to {new_touches} on Zone ID: {zone_id}")
+
+                    # INTERRUPT TRIGGER: Exceeded maximum allowed tests on dynamic zones without a BOS structure shift
+                    if new_touches >= 3:
+                        logger.critical(
+                            f"🛑 Spatial Area "
+                            f"({payload.zone_low:.2f} - {payload.zone_high:.2f}) was tested {new_touches} times. "
+                            f"Execution blocked for {payload.ticker}."
+                        )
+                        return JSONResponse(
+                            status_code=status.HTTP_423_LOCKED,
+                            content={"detail": "Cascade Inducement Trap: Dynamic zone tested more than twice without breaking structure."}
+                        )
+    except Exception as e:
+        logger.error(f"Error handling Cascade Inducement processing sequence: {str(e)}")
+
+    # 6. Spatial Deduplication Lock (Blocks duplicate alerts within a 2.0 point radius)
+    is_duplicate = False
+    for cached_key, cached_data in idempotency_cache.items():
+        if cached_data["ticker"] == payload.ticker:
+            if abs(cached_data["zh"] - payload.zone_high) <= 2.0 and abs(cached_data["zl"] - payload.zone_low) <= 2.0:
+                is_duplicate = True
+                break
+
+    if is_duplicate:
+        logger.info(f"Dropped duplicate spatial signal near {payload.zone_high:.2f} - {payload.zone_low:.2f}")
+        return JSONResponse(status_code=409, content={"detail": "Duplicate spatial signal."})
+
+    # 7. Approve and route to execution queue
+    unique_cache_key = f"{payload.ticker}_{payload.timestamp}"
+    idempotency_cache[unique_cache_key] = {"ticker": payload.ticker, "zh": payload.zone_high, "zl": payload.zone_low}
+    background_tasks.add_task(background_execution_pipeline, payload)
+    return {"status": "success"}
