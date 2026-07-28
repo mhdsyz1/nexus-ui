@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, Unlock, CheckCircle2, X, Edit3 } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, Unlock, CheckCircle2, X, Edit3, TrendingUp, TrendingDown, Zap, RefreshCw } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -40,6 +40,18 @@ interface QueueItem {
   trade_layers?: TradeLayer[];
 }
 
+interface NewsPrediction {
+  event_id: string;
+  event_name: string;
+  time_str: string;
+  forecast: number;
+  previous: number;
+  expected_delta: number;
+  predicted_action: "BUY NOW" | "SELL NOW";
+  confidence_pct: number;
+  rationale: string;
+}
+
 const backendUrl = "https://nexus-neural-machine-backend-production.up.railway.app";
 
 export default function QuantTerminal() {
@@ -51,6 +63,10 @@ export default function QuantTerminal() {
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
+
+  // Burner Prediction Matrix State
+  const [burnerPredictions, setBurnerPredictions] = useState<NewsPrediction[]>([]);
+  const [executingBurner, setExecutingBurner] = useState<boolean>(false);
 
   const [calcEquity, setCalcEquity] = useState<string>("250");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
@@ -119,6 +135,18 @@ export default function QuantTerminal() {
         if (jData) setJournalHistory(jData);
       }
 
+      if (activeTab === "BURNER") {
+        try {
+          const res = await fetch(`${backendUrl}/api/burner/predictions`);
+          if (res.ok) {
+            const data = await res.json();
+            setBurnerPredictions(data.predictions || []);
+          }
+        } catch (e) {
+          console.error("Burner prediction fetch error:", e);
+        }
+      }
+
     } catch (err) {
       console.error("Telemetry error:", err);
     } finally {
@@ -136,6 +164,8 @@ export default function QuantTerminal() {
   useEffect(() => {
     if (config.total_equity) setCalcEquity(config.total_equity.toString());
   }, [config.total_equity]);
+
+  const activeTrade = queue.find(item => item.status === "ACTIVE");
 
   const toggleKillSwitch = async () => {
     const currentAction = config.system_is_killed ? "DEACTIVATE" : "ACTIVATE";
@@ -157,7 +187,6 @@ export default function QuantTerminal() {
     }
   };
 
-  // MANUAL EQUITY UPDATE (DEPOSITS / WITHDRAWALS)
   const handleUpdateEquityManual = async () => {
     const inputVal = window.prompt(`[DEPOSIT / WITHDRAWAL ADJUSTMENT]\n\nEnter new Live Account Equity ($):`, config.total_equity.toFixed(2));
     if (!inputVal) return;
@@ -192,8 +221,6 @@ export default function QuantTerminal() {
       alert("Network error updating equity.");
     }
   };
-
-  const activeTrade = queue.find(item => item.status === "ACTIVE");
 
   const handleTakeTrade = async (id: string) => {
     let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
@@ -234,6 +261,45 @@ export default function QuantTerminal() {
       else alert("Failed to drop trade.");
     } catch (e) {
       alert("Network error dropping trade.");
+    }
+  };
+
+  const handleFireBurner = async (pred: NewsPrediction) => {
+    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    if (!secret) {
+      secret = window.prompt("Enter Webhook Secret Token to authorize Burner position:");
+      if (!secret) return;
+      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
+    }
+
+    const priceInput = window.prompt(`[PRE-NEWS $50 BURNER EXECUTOR]\n\nEnter Current Live Gold Price for ${pred.event_name}:`, "2400.00");
+    if (!priceInput) return;
+
+    setExecutingBurner(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/burner/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": secret },
+        body: JSON.stringify({
+          event_name: pred.event_name,
+          predicted_action: pred.predicted_action,
+          entry_price: parseFloat(priceInput) || 2400.0,
+          confidence_pct: pred.confidence_pct,
+          rationale: pred.rationale
+        })
+      });
+
+      if (res.ok) {
+        alert(`🔥 Burner trade executed for ${pred.event_name}! Check Terminal.`);
+        setActiveTab("TERMINAL");
+        fetchDashboardData();
+      } else {
+        alert("Failed to execute Burner trade. Check Secret Token.");
+      }
+    } catch (e) {
+      alert("Error reaching backend for Burner execution.");
+    } finally {
+      setExecutingBurner(false);
     }
   };
 
@@ -597,6 +663,89 @@ export default function QuantTerminal() {
           </div>
         )}
 
+        {/* BURNER / UNIVERSAL HIGH-IMPACT NEWS PREDICTION MATRIX */}
+        {activeTab === "BURNER" && (
+          <div className="flex flex-col gap-4 h-full">
+            <div className="p-4 border border-orange-900/40 bg-orange-950/10 rounded-xl flex flex-col gap-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-orange-900/30 pb-2">
+                    <div className="flex items-center gap-2">
+                        <Flame size={18} className="text-orange-500 animate-pulse" />
+                        <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Universal High-Impact Prediction Matrix</h3>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-bold border border-orange-500/30">
+                      $50 Fixed Margin
+                    </span>
+                </div>
+
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Pre-news quantitative predictions for any high-impact event (CPI, NFP, FOMC, GDP, PCE, PMI, Jobless Claims). Fire a $50 burner position ahead of news releases.
+                </p>
+            </div>
+
+            {/* DYNAMIC NEWS PREDICTION LIST */}
+            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-border/50 pb-2">
+                <div className="flex items-center gap-2">
+                  <Zap size={14} className="text-orange-400" />
+                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Today's High-Impact Releases ({burnerPredictions.length})</h3>
+                </div>
+                <Button onClick={fetchDashboardData} size="sm" variant="ghost" className="h-6 text-[10px] text-muted-foreground">
+                  <RefreshCw size={12} className="mr-1" /> Refresh Schedule
+                </Button>
+              </div>
+
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                {burnerPredictions.length === 0 ? (
+                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Querying live macro schedule...</div>
+                ) : (
+                  burnerPredictions.map((pred) => {
+                    const isBuy = pred.predicted_action.includes("BUY");
+                    return (
+                      <div key={pred.event_id} className="p-3.5 bg-zinc-950 border border-border/40 rounded-xl flex flex-col gap-2.5">
+                        <div className="flex justify-between items-center flex-wrap gap-2">
+                          <div>
+                            <span className="font-bold text-sm text-foreground">{pred.event_name}</span>
+                            <span className="text-[10px] text-muted-foreground ml-2">({pred.time_str})</span>
+                          </div>
+
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
+                            isBuy ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-rose-500/10 border-rose-500/40 text-rose-400"
+                          }`}>
+                            {isBuy ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                            <span>PREDICTED {pred.predicted_action}</span>
+                          </span>
+                        </div>
+
+                        {/* Forecast vs Previous */}
+                        <div className="grid grid-cols-3 gap-2 text-[10px] bg-background/50 p-2 rounded-lg border border-border/30">
+                          <div>Prev: <strong className="text-slate-300">{pred.previous}</strong></div>
+                          <div>Forecast: <strong className="text-cyan-400">{pred.forecast}</strong></div>
+                          <div>Confidence: <strong className="text-amber-400">{pred.confidence_pct}%</strong></div>
+                        </div>
+
+                        <p className="text-[10px] text-slate-400 italic">
+                          Rationale: {pred.rationale}
+                        </p>
+
+                        <div className="pt-1 flex justify-end">
+                          <Button
+                            size="sm"
+                            disabled={executingBurner}
+                            onClick={() => handleFireBurner(pred)}
+                            className="h-8 text-[10px] bg-orange-600 hover:bg-orange-500 text-white font-bold tracking-wider uppercase shadow-md shadow-orange-950/40"
+                          >
+                            <Flame className="w-3.5 h-3.5 mr-1" /> FIRE PRE-NEWS BURNER ($50)
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* JOURNAL */}
         {activeTab === "JOURNAL" && (
           <div className="flex flex-col gap-4 h-full">
@@ -705,29 +854,6 @@ export default function QuantTerminal() {
               >
                 {config.system_is_killed ? "RESTORE SYSTEM" : "ACTIVATE KILL SWITCH"}
               </Button>
-            </div>
-          </div>
-        )}
-
-        {/* BURNER */}
-        {activeTab === "BURNER" && (
-          <div className="flex flex-col gap-4 h-full">
-            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-2">
-                <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-2">
-                    <Flame size={16} className="text-orange-500" />
-                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-wider">Kinetic Event Protocol</h3>
-                </div>
-                <div className="p-3 border border-orange-900/30 bg-orange-950/10 rounded-lg flex justify-between items-center">
-                    <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Burner Equity</span>
-                    <span className="text-lg font-bold text-foreground">$50.00</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-                  Isolated full-margin execution sandbox.
-                </p>
-            </div>
-            
-            <div className="flex-1 border-2 border-orange-900/20 border-dashed rounded-xl bg-zinc-950/30 flex flex-col items-center justify-center text-muted-foreground shadow-inner min-h-80">
-              <span className="text-xs uppercase tracking-widest font-bold text-orange-900/50">Module Offline</span>
             </div>
           </div>
         )}
