@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, Unlock, CheckCircle2, X } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, Unlock, CheckCircle2, X, Edit3 } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -154,6 +154,42 @@ export default function QuantTerminal() {
       else alert("Command rejected. Invalid Token.");
     } catch (err) {
       alert("Fatal: Could not reach Railway backend.");
+    }
+  };
+
+  // MANUAL EQUITY UPDATE (DEPOSITS / WITHDRAWALS)
+  const handleUpdateEquityManual = async () => {
+    const inputVal = window.prompt(`[DEPOSIT / WITHDRAWAL ADJUSTMENT]\n\nEnter new Live Account Equity ($):`, config.total_equity.toFixed(2));
+    if (!inputVal) return;
+
+    const newEquity = parseFloat(inputVal);
+    if (isNaN(newEquity) || newEquity <= 0) {
+      alert("Invalid equity amount.");
+      return;
+    }
+
+    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    if (!secret) {
+      secret = window.prompt("Enter Webhook Secret Token to authorize equity change:");
+      if (!secret) return;
+      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
+    }
+
+    try {
+      const res = await fetch(`${backendUrl}/api/update-equity`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": secret },
+        body: JSON.stringify({ total_equity: newEquity })
+      });
+
+      if (res.ok) {
+        alert(`Live equity updated to $${newEquity.toFixed(2)}.`);
+        fetchDashboardData();
+      } else {
+        alert("Failed to update equity. Check Secret Token.");
+      }
+    } catch (e) {
+      alert("Network error updating equity.");
     }
   };
 
@@ -370,10 +406,17 @@ export default function QuantTerminal() {
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="grid grid-cols-2 gap-2">
-              <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Live Equity</span>
+              <button 
+                onClick={handleUpdateEquityManual} 
+                className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 hover:bg-zinc-800/80 transition-all flex flex-col items-center justify-center cursor-pointer group"
+                title="Click to Deposit/Withdraw or Adjust Equity"
+              >
+                <div className="flex items-center gap-1 mb-1">
+                  <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Live Equity</span>
+                  <Edit3 size={10} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
                 <span className="text-lg font-bold text-primary">${config.total_equity.toFixed(2)}</span>
-              </div>
+              </button>
               <div className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 flex flex-col items-center justify-center">
                 <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider mb-1">Win Rate</span>
                 <span className="text-lg font-bold text-emerald-400">{analytics.winRate.toFixed(1)}%</span>
@@ -410,7 +453,6 @@ export default function QuantTerminal() {
                     const isPending = item.status === "PENDING";
                     const isActive = item.status === "ACTIVE";
 
-                    // Calculate Lot Sizes
                     const lotT1 = calculateSignalLots(config.total_equity, 0.02, item.zone_low, item.zone_high, item.stop_loss);
                     const lotT2 = calculateSignalLots(config.total_equity, 0.04, item.zone_low, item.zone_high, item.stop_loss);
                     const lotT3 = calculateSignalLots(config.total_equity, 0.06, item.zone_low, item.zone_high, item.stop_loss);
@@ -452,7 +494,6 @@ export default function QuantTerminal() {
                               <span className="font-bold text-emerald-400">{item.take_profit?.toFixed(2)}</span>
                             </div>
 
-                            {/* Position Lot Sizes */}
                             <div className="grid grid-cols-3 gap-1 pt-1 text-[9px] font-bold text-center">
                               <div className="p-1 rounded bg-zinc-900 border border-border/30">T1 (2%): <span className="text-cyan-400">{lotT1.toFixed(2)}</span></div>
                               <div className="p-1 rounded bg-zinc-900 border border-border/30">T2 (4%): <span className="text-cyan-400">{lotT2.toFixed(2)}</span></div>
@@ -461,7 +502,6 @@ export default function QuantTerminal() {
                           </div>
                         )}
 
-                        {/* ACTION BUTTONS */}
                         {isPending && (
                           <div className="grid grid-cols-2 gap-2 mt-1">
                             <Button 
@@ -585,10 +625,15 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* CALCULATOR */}
+        {/* CALCULATOR / SIZER */}
         {activeTab === "CALCULATOR" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
-            <h3 className="text-lg font-bold mb-5 text-primary border-b border-border/50 pb-3 font-mono">XAUUSD Position Sizer</h3>
+            <div className="flex justify-between items-center border-b border-border/50 pb-3 mb-5">
+              <h3 className="text-lg font-bold text-primary font-mono">XAUUSD Position Sizer</h3>
+              <Button onClick={handleUpdateEquityManual} size="sm" variant="outline" className="h-7 text-[10px] border-border/50 text-slate-300">
+                <Edit3 size={12} className="mr-1" /> Edit Equity
+              </Button>
+            </div>
             <div className="space-y-5 text-sm font-mono">
               <div className="flex flex-col gap-1.5">
                 <label className="text-muted-foreground font-semibold">Account Equity ($)</label>
@@ -639,6 +684,16 @@ export default function QuantTerminal() {
             <div>
               <h3 className="text-lg font-bold text-primary border-b border-border/50 pb-3 mb-2">Admin Overrides</h3>
               <p className="text-xs text-muted-foreground">Require master API key authorization to execute.</p>
+            </div>
+
+            <div className="p-4 border border-border/50 bg-zinc-950 rounded-xl flex items-center justify-between font-mono text-xs">
+              <div>
+                <p className="font-bold text-foreground">Live Account Equity Balance</p>
+                <p className="text-muted-foreground text-[10px]">Current: ${config.total_equity.toFixed(2)}</p>
+              </div>
+              <Button onClick={handleUpdateEquityManual} size="sm" variant="outline" className="border-border/50 text-xs font-bold">
+                <Edit3 size={12} className="mr-1" /> Adjust Balance
+              </Button>
             </div>
             
             <div className="p-4 border border-red-900/30 bg-red-950/10 rounded-xl">
