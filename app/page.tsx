@@ -285,7 +285,6 @@ export default function QuantTerminal() {
       });
 
       if (res.ok) {
-        // Optimistically wait a moment for the backend task to complete before refetching UI
         setTimeout(() => fetchDashboardData(), 1500); 
       } else {
         alert("Failed to sync macro schedule. Check Secret Token.");
