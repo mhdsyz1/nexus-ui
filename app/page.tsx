@@ -64,6 +64,7 @@ export default function QuantTerminal() {
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 });
+  const [telemetry, setTelemetry] = useState({ market_regime: "AWAITING DATA", structure: "NEUTRAL", volume_delta: 0, magnet_node: 0 });
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
@@ -130,6 +131,22 @@ export default function QuantTerminal() {
           netPnL: totalPnL
         });
       }
+
+      // Live Dynamic Telemetry Matrix Fetch
+      try {
+        const telRes = await fetch(`${backendUrl}/api/telemetry`);
+        if (telRes.ok) {
+          const telData = await telRes.json();
+          setTelemetry({
+            market_regime: telData.market_regime || "NEUTRAL",
+            structure: telData.structure || "NEUTRAL",
+            volume_delta: telData.volume_delta || 0,
+            magnet_node: telData.magnet_node || 0
+          });
+        }
+      } catch (e) {
+        console.error("Telemetry API fetch error:", e);
+      }
       
       if (activeTab === "JOURNAL") {
         const { data: jData } = await supabase
@@ -140,23 +157,23 @@ export default function QuantTerminal() {
         if (jData) setJournalHistory(jData);
       }
 
-      if (activeTab === "BURNER") {
-        try {
-          const res = await fetch(`${backendUrl}/api/burner/predictions`);
-          if (res.ok) {
-            const data = await res.json();
-            setBurnerPredictions(data.predictions || []);
-          }
-        } catch (e) {
-          console.error("Burner prediction fetch error:", e);
-        }
-      }
-
     } catch (err) {
-      console.error("Telemetry error:", err);
+      console.error("Dashboard sync error:", err);
     } finally {
       setLoading(false);
       isFetching.current = false;
+    }
+  };
+
+  const fetchBurnerPredictions = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/api/burner/predictions`);
+      if (res.ok) {
+        const data = await res.json();
+        setBurnerPredictions(data.predictions || []);
+      }
+    } catch (e) {
+      console.error("Burner prediction fetch error:", e);
     }
   };
 
@@ -164,6 +181,12 @@ export default function QuantTerminal() {
     fetchDashboardData();
     const interval = setInterval(fetchDashboardData, 4000);
     return () => clearInterval(interval);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "BURNER") {
+      fetchBurnerPredictions();
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -285,7 +308,7 @@ export default function QuantTerminal() {
       });
 
       if (res.ok) {
-        setTimeout(() => fetchDashboardData(), 1500); 
+        setTimeout(() => fetchBurnerPredictions(), 1500); 
       } else {
         alert("Failed to sync macro schedule. Check Secret Token.");
       }
@@ -434,14 +457,14 @@ export default function QuantTerminal() {
                       className={`text-xs font-bold ${pendingOutcome === "LOSS" ? "bg-rose-600 hover:bg-rose-500 text-white" : "border-border/50"}`}
                       onClick={() => { setPendingOutcome("LOSS"); setPnlInput("-5.00"); }}
                     >
-                      LOSS 💀
+                      LOSS 🛑
                     </Button>
                     <Button 
                       variant={pendingOutcome === "BREAKEVEN" ? "default" : "outline"} 
                       className={`text-xs font-bold ${pendingOutcome === "BREAKEVEN" ? "bg-amber-600 hover:bg-amber-500 text-white" : "border-border/50"}`}
                       onClick={() => { setPendingOutcome("BREAKEVEN"); setPnlInput("0.00"); }}
                     >
-                      BE 🛡️
+                      BE ⚖️
                     </Button>
                   </div>
                 </div>
@@ -665,29 +688,29 @@ export default function QuantTerminal() {
               <div className="p-4 grid grid-cols-2 gap-3 flex-1 content-start">
                 <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Market Regime</span>
-                  <span className={`text-sm font-bold ${queue[0]?.market_regime === "TRENDING" ? "text-cyan-400" : queue[0]?.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
-                    {queue[0]?.market_regime || "AWAITING DATA"}
+                  <span className={`text-sm font-bold ${telemetry.market_regime === "TRENDING" ? "text-cyan-400" : telemetry.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
+                    {telemetry.market_regime}
                   </span>
                 </div>
                 
                 <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Structure</span>
                   <span className="text-sm font-bold text-foreground">
-                    {queue[0]?.structure || "NEUTRAL"}
+                    {telemetry.structure}
                   </span>
                 </div>
 
                 <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Footprint Delta</span>
-                  <span className={`text-sm font-bold ${Number(queue[0]?.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                    {queue[0]?.volume_delta ? Number(queue[0].volume_delta).toLocaleString() : "0"}
+                  <span className={`text-sm font-bold ${Number(telemetry.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                    {telemetry.volume_delta ? Number(telemetry.volume_delta).toLocaleString() : "0"}
                   </span>
                 </div>
 
                 <div className="p-3 border border-border/20 rounded-lg bg-background/50">
                   <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Inst. Magnet</span>
                   <span className="text-sm font-bold text-amber-400">
-                    ${queue[0]?.magnet_node?.toFixed(2) || "0.00"}
+                    ${telemetry.magnet_node ? Number(telemetry.magnet_node).toFixed(2) : "0.00"}
                   </span>
                 </div>
               </div>
