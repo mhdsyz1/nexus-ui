@@ -733,7 +733,7 @@ export default function QuantTerminal() {
               </div>
 
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Cross-validates 48-hour macro economic forecast expectations against live M15 market structure, active Breaker Blocks, and institutional volume delta before executing pre-news positions.
+                Evaluates High & Medium impact USD events within a strict <strong>15-minute pre-release window</strong> against active M15 market structure, Breaker Blocks, and institutional volume delta before executing pre-news positions.
               </p>
             </div>
 
@@ -742,7 +742,7 @@ export default function QuantTerminal() {
               <div className="flex items-center justify-between border-b border-border/50 pb-2">
                 <div className="flex items-center gap-2">
                   <Zap size={14} className="text-orange-400" />
-                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Live Macro + Technical Analysis ({burnerPredictions.length})</h3>
+                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Active T-15m Macro Signals ({burnerPredictions.length})</h3>
                 </div>
                 <Button 
                   onClick={handleTriggerMacroSync} 
@@ -758,7 +758,10 @@ export default function QuantTerminal() {
 
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                 {burnerPredictions.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Evaluating fundamental + technical confluence...</div>
+                  <div className="text-xs text-muted-foreground text-center py-10 bg-zinc-950/50 rounded-xl border border-dashed border-border/40 flex flex-col items-center justify-center gap-2">
+                    <span className="text-orange-400 font-bold">T-15m Execution Window Standby</span>
+                    <span className="text-[11px] text-slate-400 max-w-xs text-center">No USD High/Medium impact events within the 15-minute pre-release window. System standing by...</span>
+                  </div>
                 ) : (
                   burnerPredictions.map((pred: any) => {
                     const isBuy = pred.predicted_action.includes("BUY");
