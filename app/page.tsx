@@ -663,70 +663,88 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* BURNER / UNIVERSAL HIGH-IMPACT NEWS PREDICTION MATRIX */}
+        {/* BURNER / FUNDAMENTAL + TECHNICAL CONFLUENCE MATRIX */}
         {activeTab === "BURNER" && (
-          <div className="flex flex-col gap-4 h-full">
+          <div className="flex flex-col gap-4 h-full font-mono">
             <div className="p-4 border border-orange-900/40 bg-orange-950/10 rounded-xl flex flex-col gap-3 shadow-sm">
-                <div className="flex items-center justify-between border-b border-orange-900/30 pb-2">
-                    <div className="flex items-center gap-2">
-                        <Flame size={18} className="text-orange-500 animate-pulse" />
-                        <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Universal High-Impact Prediction Matrix</h3>
-                    </div>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-bold border border-orange-500/30">
-                      $50 Fixed Margin
-                    </span>
+              <div className="flex items-center justify-between border-b border-orange-900/30 pb-2">
+                <div className="flex items-center gap-2">
+                  <Flame size={18} className="text-orange-500 animate-pulse" />
+                  <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Fundamental + Technical Confluence Matrix</h3>
                 </div>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-bold border border-orange-500/30">
+                  $50 Fixed Margin
+                </span>
+              </div>
 
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Pre-news quantitative predictions for any high-impact event (CPI, NFP, FOMC, GDP, PCE, PMI, Jobless Claims). Fire a $50 burner position ahead of news releases.
-                </p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Cross-validates macro economic forecast expectations against live M15 market structure, active Breaker Blocks, and institutional volume delta before executing pre-news positions.
+              </p>
             </div>
 
-            {/* DYNAMIC NEWS PREDICTION LIST */}
+            {/* CONFLUENCE PREDICTION CARDS */}
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-border/50 pb-2">
                 <div className="flex items-center gap-2">
                   <Zap size={14} className="text-orange-400" />
-                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Today's High-Impact Releases ({burnerPredictions.length})</h3>
+                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Live Macro + Technical Analysis ({burnerPredictions.length})</h3>
                 </div>
                 <Button onClick={fetchDashboardData} size="sm" variant="ghost" className="h-6 text-[10px] text-muted-foreground">
-                  <RefreshCw size={12} className="mr-1" /> Refresh Schedule
+                  <RefreshCw size={12} className="mr-1" /> Sync Context
                 </Button>
               </div>
 
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                 {burnerPredictions.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Querying live macro schedule...</div>
+                  <div className="text-xs text-muted-foreground text-center py-6 animate-pulse">Evaluating fundamental + technical confluence...</div>
                 ) : (
-                  burnerPredictions.map((pred) => {
+                  burnerPredictions.map((pred: any) => {
                     const isBuy = pred.predicted_action.includes("BUY");
+                    const isGradeA = pred.confidence_pct >= 85;
+
                     return (
-                      <div key={pred.event_id} className="p-3.5 bg-zinc-950 border border-border/40 rounded-xl flex flex-col gap-2.5">
+                      <div key={pred.event_id} className={`p-3.5 bg-zinc-950 border rounded-xl flex flex-col gap-2.5 transition-all ${
+                        isGradeA ? "border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]" : "border-border/40"
+                      }`}>
+                        {/* Event Header & Action Badge */}
                         <div className="flex justify-between items-center flex-wrap gap-2">
                           <div>
                             <span className="font-bold text-sm text-foreground">{pred.event_name}</span>
                             <span className="text-[10px] text-muted-foreground ml-2">({pred.time_str})</span>
                           </div>
 
-                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
-                            isBuy ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-rose-500/10 border-rose-500/40 text-rose-400"
-                          }`}>
-                            {isBuy ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                            <span>PREDICTED {pred.predicted_action}</span>
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                              isGradeA ? "bg-amber-500/20 text-amber-300 border-amber-500/40" : "bg-slate-800 text-slate-400 border-slate-700"
+                            }`}>
+                              {pred.confluence_grade}
+                            </span>
+
+                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
+                              isBuy ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-rose-500/10 border-rose-500/40 text-rose-400"
+                            }`}>
+                              {isBuy ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                              <span>{pred.predicted_action}</span>
+                            </span>
+                          </div>
                         </div>
 
-                        {/* Forecast vs Previous */}
-                        <div className="grid grid-cols-3 gap-2 text-[10px] bg-background/50 p-2 rounded-lg border border-border/30">
-                          <div>Prev: <strong className="text-slate-300">{pred.previous}</strong></div>
-                          <div>Forecast: <strong className="text-cyan-400">{pred.forecast}</strong></div>
-                          <div>Confidence: <strong className="text-amber-400">{pred.confidence_pct}%</strong></div>
+                        {/* Macro & Technical Breakdown Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-background/50 p-2.5 rounded-lg border border-border/30">
+                          <div className="space-y-1">
+                            <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">1. Fundamental Bias</span>
+                            <p className="text-slate-300">Prev: <strong className="text-foreground">{pred.previous}</strong> | Forecast: <strong className="text-cyan-400">{pred.forecast}</strong></p>
+                            <p className="text-slate-400 italic">{pred.fundamental_rationale}</p>
+                          </div>
+
+                          <div className="space-y-1 border-l border-border/20 pl-2">
+                            <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">2. Technical Structure</span>
+                            <p className="text-slate-300">Regime: <strong className="text-amber-400">{pred.market_regime}</strong> | Score: <strong className="text-emerald-400">{pred.confidence_pct}%</strong></p>
+                            <p className="text-slate-400 italic">{pred.technical_rationale}</p>
+                          </div>
                         </div>
 
-                        <p className="text-[10px] text-slate-400 italic">
-                          Rationale: {pred.rationale}
-                        </p>
-
+                        {/* Fire Button */}
                         <div className="pt-1 flex justify-end">
                           <Button
                             size="sm"
@@ -734,7 +752,7 @@ export default function QuantTerminal() {
                             onClick={() => handleFireBurner(pred)}
                             className="h-8 text-[10px] bg-orange-600 hover:bg-orange-500 text-white font-bold tracking-wider uppercase shadow-md shadow-orange-950/40"
                           >
-                            <Flame className="w-3.5 h-3.5 mr-1" /> FIRE PRE-NEWS BURNER ($50)
+                            <Flame className="w-3.5 h-3.5 mr-1" /> FIRE $50 BURNER (CONFLUENCE {pred.confidence_pct}%)
                           </Button>
                         </div>
                       </div>
