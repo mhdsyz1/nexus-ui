@@ -49,7 +49,11 @@ interface NewsPrediction {
   expected_delta: number;
   predicted_action: "BUY NOW" | "SELL NOW";
   confidence_pct: number;
-  rationale: string;
+  confluence_grade: string;
+  fundamental_rationale: string;
+  technical_rationale: string;
+  market_regime: string;
+  volume_delta: number;
 }
 
 const backendUrl = "https://nexus-neural-machine-backend-production.up.railway.app";
@@ -67,6 +71,7 @@ export default function QuantTerminal() {
   // Burner Prediction Matrix State
   const [burnerPredictions, setBurnerPredictions] = useState<NewsPrediction[]>([]);
   const [executingBurner, setExecutingBurner] = useState<boolean>(false);
+  const [syncingMacro, setSyncingMacro] = useState<boolean>(false);
 
   const [calcEquity, setCalcEquity] = useState<string>("250");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
@@ -264,6 +269,34 @@ export default function QuantTerminal() {
     }
   };
 
+  const handleTriggerMacroSync = async () => {
+    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
+    if (!secret) {
+      secret = window.prompt("Enter Webhook Secret Token to authorize macro refresh:");
+      if (!secret) return;
+      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
+    }
+
+    setSyncingMacro(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/macro-schedule/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": secret }
+      });
+
+      if (res.ok) {
+        // Optimistically wait a moment for the backend task to complete before refetching UI
+        setTimeout(() => fetchDashboardData(), 1500); 
+      } else {
+        alert("Failed to sync macro schedule. Check Secret Token.");
+      }
+    } catch (e) {
+      alert("Network error triggering macro sync.");
+    } finally {
+      setTimeout(() => setSyncingMacro(false), 1500);
+    }
+  };
+
   const handleFireBurner = async (pred: NewsPrediction) => {
     let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!secret) {
@@ -285,7 +318,7 @@ export default function QuantTerminal() {
           predicted_action: pred.predicted_action,
           entry_price: parseFloat(priceInput) || 2400.0,
           confidence_pct: pred.confidence_pct,
-          rationale: pred.rationale
+          rationale: `${pred.fundamental_rationale} | ${pred.technical_rationale}`
         })
       });
 
@@ -395,21 +428,21 @@ export default function QuantTerminal() {
                       className={`text-xs font-bold ${pendingOutcome === "WIN" ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "border-border/50"}`}
                       onClick={() => { setPendingOutcome("WIN"); setPnlInput("15.00"); }}
                     >
-                      WIN 🟢
+                      WIN 🏆
                     </Button>
                     <Button 
                       variant={pendingOutcome === "LOSS" ? "default" : "outline"} 
                       className={`text-xs font-bold ${pendingOutcome === "LOSS" ? "bg-rose-600 hover:bg-rose-500 text-white" : "border-border/50"}`}
                       onClick={() => { setPendingOutcome("LOSS"); setPnlInput("-5.00"); }}
                     >
-                      LOSS 🔴
+                      LOSS 💀
                     </Button>
                     <Button 
                       variant={pendingOutcome === "BREAKEVEN" ? "default" : "outline"} 
                       className={`text-xs font-bold ${pendingOutcome === "BREAKEVEN" ? "bg-amber-600 hover:bg-amber-500 text-white" : "border-border/50"}`}
                       onClick={() => { setPendingOutcome("BREAKEVEN"); setPnlInput("0.00"); }}
                     >
-                      BE 🟡
+                      BE 🛡️
                     </Button>
                   </div>
                 </div>
@@ -670,7 +703,7 @@ export default function QuantTerminal() {
               <div className="flex items-center justify-between border-b border-orange-900/30 pb-2">
                 <div className="flex items-center gap-2">
                   <Flame size={18} className="text-orange-500 animate-pulse" />
-                  <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Fundamental + Technical Confluence Matrix</h3>
+                  <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Fundamental + Technical Confluence</h3>
                 </div>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-bold border border-orange-500/30">
                   $50 Fixed Margin
@@ -678,7 +711,7 @@ export default function QuantTerminal() {
               </div>
 
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Cross-validates macro economic forecast expectations against live M15 market structure, active Breaker Blocks, and institutional volume delta before executing pre-news positions.
+                Cross-validates 48-hour macro economic forecast expectations against live M15 market structure, active Breaker Blocks, and institutional volume delta before executing pre-news positions.
               </p>
             </div>
 
@@ -689,8 +722,15 @@ export default function QuantTerminal() {
                   <Zap size={14} className="text-orange-400" />
                   <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Live Macro + Technical Analysis ({burnerPredictions.length})</h3>
                 </div>
-                <Button onClick={fetchDashboardData} size="sm" variant="ghost" className="h-6 text-[10px] text-muted-foreground">
-                  <RefreshCw size={12} className="mr-1" /> Sync Context
+                <Button 
+                  onClick={handleTriggerMacroSync} 
+                  disabled={syncingMacro}
+                  size="sm" 
+                  variant="ghost" 
+                  className={`h-6 text-[10px] text-muted-foreground ${syncingMacro ? "opacity-50" : ""}`}
+                >
+                  <RefreshCw size={12} className={`mr-1 ${syncingMacro ? "animate-spin" : ""}`} /> 
+                  {syncingMacro ? "Syncing..." : "Sync Context"}
                 </Button>
               </div>
 
@@ -703,7 +743,7 @@ export default function QuantTerminal() {
                     const isGradeA = pred.confidence_pct >= 85;
 
                     return (
-                      <div key={pred.event_id} className={`p-3.5 bg-zinc-950 border rounded-xl flex flex-col gap-2.5 transition-all ${
+                      <div key={pred.event_id} className={`p-3.5 bg-zinc-950 border rounded-xl flex flex-col gap-3 transition-all ${
                         isGradeA ? "border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]" : "border-border/40"
                       }`}>
                         {/* Event Header & Action Badge */}
@@ -729,18 +769,18 @@ export default function QuantTerminal() {
                           </div>
                         </div>
 
-                        {/* Macro & Technical Breakdown Grid */}
-                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-background/50 p-2.5 rounded-lg border border-border/30">
-                          <div className="space-y-1">
+                        {/* Macro & Technical Breakdown Grid - Side by Side */}
+                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-background/50 p-2.5 rounded-lg border border-border/30 h-full">
+                          <div className="space-y-1.5 pr-2">
                             <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">1. Fundamental Bias</span>
                             <p className="text-slate-300">Prev: <strong className="text-foreground">{pred.previous}</strong> | Forecast: <strong className="text-cyan-400">{pred.forecast}</strong></p>
-                            <p className="text-slate-400 italic">{pred.fundamental_rationale}</p>
+                            <p className="text-slate-400 italic leading-relaxed">{pred.fundamental_rationale}</p>
                           </div>
 
-                          <div className="space-y-1 border-l border-border/20 pl-2">
+                          <div className="space-y-1.5 border-l border-border/20 pl-3">
                             <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">2. Technical Structure</span>
                             <p className="text-slate-300">Regime: <strong className="text-amber-400">{pred.market_regime}</strong> | Score: <strong className="text-emerald-400">{pred.confidence_pct}%</strong></p>
-                            <p className="text-slate-400 italic">{pred.technical_rationale}</p>
+                            <p className="text-slate-400 italic leading-relaxed">{pred.technical_rationale}</p>
                           </div>
                         </div>
 
