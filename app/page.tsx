@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, Unlock, CheckCircle2, X, Edit3, TrendingUp, TrendingDown, Zap, RefreshCw } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, CheckCircle2, X, Edit3, TrendingUp, TrendingDown, Zap, RefreshCw, Bot } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -43,20 +43,22 @@ interface QueueItem {
 interface NewsPrediction {
   event_id: string;
   event_name: string;
+  impact: string;
   time_str: string;
   forecast: number;
   previous: number;
-  expected_delta: number;
   predicted_action: "BUY NOW" | "SELL NOW";
   confidence_pct: number;
   confluence_grade: string;
   fundamental_rationale: string;
   technical_rationale: string;
+  gemini_ai_rationale: string;
+  ai_sentiment_score: number;
   market_regime: string;
   volume_delta: number;
 }
 
-const backendUrl = "https://nexus-neural-machine-backend-production.up.railway.app";
+const backendUrl = "[https://nexus-neural-machine-backend-production.up.railway.app](https://nexus-neural-machine-backend-production.up.railway.app)";
 
 export default function QuantTerminal() {
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL" | "BURNER">("TERMINAL");
@@ -64,7 +66,7 @@ export default function QuantTerminal() {
   const [config, setConfig] = useState<RiskConfig>({ total_equity: 250.0, max_allowed_layers: 4, system_is_killed: false });
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [analytics, setAnalytics] = useState({ winRate: 0, totalWins: 0, totalLosses: 0, netPnL: 0 });
-  const [telemetry, setTelemetry] = useState({ market_regime: "AWAITING DATA", structure: "NEUTRAL", volume_delta: 0, magnet_node: 0 });
+  const [telemetry, setTelemetry] = useState({ market_regime: "NEUTRAL", structure: "NEUTRAL", volume_delta: 0, magnet_node: 0 });
   const [loading, setLoading] = useState(true);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const isFetching = useRef(false);
@@ -74,11 +76,13 @@ export default function QuantTerminal() {
   const [executingBurner, setExecutingBurner] = useState<boolean>(false);
   const [syncingMacro, setSyncingMacro] = useState<boolean>(false);
 
+  // Calculator State
   const [calcEquity, setCalcEquity] = useState<string>("250");
   const [calcRiskPct, setCalcRiskPct] = useState<string>("2");
   const [calcEntry, setCalcEntry] = useState<string>("2350.00");
   const [calcSL, setCalcSL] = useState<string>("2345.00");
 
+  // Close Modal State
   const [pendingJournalTradeId, setPendingJournalTradeId] = useState<string | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<"WIN" | "LOSS" | "BREAKEVEN" | "DROPPED" | null>(null);
   const [journalText, setJournalText] = useState("");
@@ -91,19 +95,20 @@ export default function QuantTerminal() {
     return () => clearInterval(timer);
   }, []);
 
+  // Fetch Dashboard Data (Polls every 4s)
   const fetchDashboardData = async () => {
     if (isFetching.current) return;
     isFetching.current = true;
 
     try {
-      const { data: configData, error: configError } = await supabase
+      const { data: configData } = await supabase
         .from("risk_configuration")
         .select("total_equity, max_allowed_layers, system_is_killed")
         .order("created_at", { ascending: false }).limit(1).single();
 
-      if (!configError && configData) setConfig(configData);
+      if (configData) setConfig(configData);
 
-      const { data: queueData, error: queueError } = await supabase
+      const { data: queueData } = await supabase
         .from("execution_queue")
         .select(`
           id, ticker, action, status, created_at, zone_low, zone_high, stop_loss, take_profit, market_regime, volume_delta, magnet_node, structure, realized_pnl,
@@ -111,14 +116,14 @@ export default function QuantTerminal() {
         `)
         .order("created_at", { ascending: false }).limit(10);
 
-      if (!queueError && queueData) setQueue(queueData as any);
+      if (queueData) setQueue(queueData as any);
 
-      const { data: statsData, error: statsError } = await supabase
+      const { data: statsData } = await supabase
         .from("execution_queue")
         .select("status, realized_pnl")
         .in("status", ["WIN", "LOSS", "BREAKEVEN"]);
 
-      if (!statsError && statsData) {
+      if (statsData) {
         const wins = statsData.filter(t => t.status === "WIN").length;
         const losses = statsData.filter(t => t.status === "LOSS").length;
         const total = statsData.length;
@@ -132,7 +137,7 @@ export default function QuantTerminal() {
         });
       }
 
-      // Live Dynamic Telemetry Matrix Fetch
+      // Live Dynamic Quant Telemetry Matrix Fetch
       try {
         const telRes = await fetch(`${backendUrl}/api/telemetry`);
         if (telRes.ok) {
@@ -145,9 +150,9 @@ export default function QuantTerminal() {
           });
         }
       } catch (e) {
-        console.error("Telemetry API fetch error:", e);
+        console.error("Telemetry fetch error:", e);
       }
-      
+
       if (activeTab === "JOURNAL") {
         const { data: jData } = await supabase
           .from("trade_journal")
@@ -165,7 +170,9 @@ export default function QuantTerminal() {
     }
   };
 
+  // Burner Predictions fetched ONLY on Tab Switch or Manual Sync
   const fetchBurnerPredictions = async () => {
+    setSyncingMacro(true);
     try {
       const res = await fetch(`${backendUrl}/api/burner/predictions`);
       if (res.ok) {
@@ -173,7 +180,9 @@ export default function QuantTerminal() {
         setBurnerPredictions(data.predictions || []);
       }
     } catch (e) {
-      console.error("Burner prediction fetch error:", e);
+      console.error("Burner fetch error:", e);
+    } finally {
+      setSyncingMacro(false);
     }
   };
 
@@ -292,37 +301,10 @@ export default function QuantTerminal() {
     }
   };
 
-  const handleTriggerMacroSync = async () => {
-    let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
-    if (!secret) {
-      secret = window.prompt("Enter Webhook Secret Token to authorize macro refresh:");
-      if (!secret) return;
-      localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
-    }
-
-    setSyncingMacro(true);
-    try {
-      const res = await fetch(`${backendUrl}/api/macro-schedule/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Admin-Key": secret }
-      });
-
-      if (res.ok) {
-        setTimeout(() => fetchBurnerPredictions(), 1500); 
-      } else {
-        alert("Failed to sync macro schedule. Check Secret Token.");
-      }
-    } catch (e) {
-      alert("Network error triggering macro sync.");
-    } finally {
-      setTimeout(() => setSyncingMacro(false), 1500);
-    }
-  };
-
   const handleFireBurner = async (pred: NewsPrediction) => {
     let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!secret) {
-      secret = window.prompt("Enter Webhook Secret Token to authorize Burner position:");
+      secret = window.prompt("Enter Webhook Secret Token:");
       if (!secret) return;
       localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
     }
@@ -340,19 +322,19 @@ export default function QuantTerminal() {
           predicted_action: pred.predicted_action,
           entry_price: parseFloat(priceInput) || 2400.0,
           confidence_pct: pred.confidence_pct,
-          rationale: `${pred.fundamental_rationale} | ${pred.technical_rationale}`
+          rationale: `${pred.fundamental_rationale} | Gemini AI: ${pred.gemini_ai_rationale}`
         })
       });
 
       if (res.ok) {
-        alert(`🔥 Burner trade executed for ${pred.event_name}! Check Terminal.`);
+        alert(`🔥 Burner trade executed for ${pred.event_name}!`);
         setActiveTab("TERMINAL");
         fetchDashboardData();
       } else {
-        alert("Failed to execute Burner trade. Check Secret Token.");
+        alert("Execution failed.");
       }
     } catch (e) {
-      alert("Error reaching backend for Burner execution.");
+      alert("Error reaching backend.");
     } finally {
       setExecutingBurner(false);
     }
@@ -369,7 +351,7 @@ export default function QuantTerminal() {
     
     let secret = localStorage.getItem("NEXUS_WEBHOOK_SECRET");
     if (!secret) {
-      secret = window.prompt("Enter Webhook Secret Token to authenticate:");
+      secret = window.prompt("Enter Webhook Secret Token:");
       if (!secret) return;
       localStorage.setItem("NEXUS_WEBHOOK_SECRET", secret);
     }
@@ -393,7 +375,7 @@ export default function QuantTerminal() {
       });
 
       if (!res.ok) {
-        alert("Failed to close trade on API.");
+        alert("Failed to close trade.");
         return;
       }
 
@@ -404,10 +386,11 @@ export default function QuantTerminal() {
       fetchDashboardData();
 
     } catch (err) {
-      alert("Fatal: Network error reaching backend.");
+      alert("Network error.");
     }
   };
 
+  // Sizer calculations
   const equityNum = parseFloat(calcEquity) || 0;
   const riskPctNum = parseFloat(calcRiskPct) || 0;
   const entryNum = parseFloat(calcEntry) || 0;
@@ -502,7 +485,7 @@ export default function QuantTerminal() {
       {/* TOP STATUS BAR */}
       <header className="flex justify-between items-center p-3 border-b border-border/50 bg-card shrink-0 shadow-sm">
         <div className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600" : activeTrade ? "bg-amber-500 animate-pulse" : "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"}`} />
+          <span className={`h-2.5 w-2.5 rounded-full ${config.system_is_killed ? "bg-red-600" : activeTrade ? "bg-amber-500 animate-pulse" : "bg-emerald-500 animate-pulse"}`} />
           <h1 className="text-sm font-bold tracking-widest uppercase text-primary">
             {config.system_is_killed ? "SYSTEM HALTED" : activeTrade ? "POSITION LOCKED" : "NEXUS LIVE"}
           </h1>
@@ -523,14 +506,13 @@ export default function QuantTerminal() {
       {/* MAIN CANVAS */}
       <main className="flex-1 overflow-y-auto p-4 pb-24">
         
-        {/* TERMINAL */}
+        {/* TERMINAL TAB */}
         {activeTab === "TERMINAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="grid grid-cols-2 gap-2">
               <button 
                 onClick={handleUpdateEquityManual} 
                 className="p-3 border border-border/50 rounded-xl bg-zinc-900/50 hover:bg-zinc-800/80 transition-all flex flex-col items-center justify-center cursor-pointer group"
-                title="Click to Deposit/Withdraw or Adjust Equity"
               >
                 <div className="flex items-center gap-1 mb-1">
                   <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Live Equity</span>
@@ -670,166 +652,97 @@ export default function QuantTerminal() {
             </div>
 
             {/* TELEMETRY MATRIX HUD */}
-            <div className="flex-1 border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner min-h-80 relative overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between p-3 border-b border-border/30 bg-zinc-900/50">
+            <div className="border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner p-3">
+              <div className="flex items-center justify-between border-b border-border/30 pb-2 mb-3">
                 <div className="flex items-center gap-2">
                   <Activity size={14} className="text-primary" />
                   <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Quant Telemetry Matrix</h3>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span className="text-[9px] text-emerald-500 font-bold uppercase tracking-widest">Live Sync</span>
-                </div>
+                <span className="text-[9px] text-emerald-500 font-bold uppercase">Live Sync</span>
               </div>
               
-              <div className="p-4 grid grid-cols-2 gap-3 flex-1 content-start">
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Market Regime</span>
-                  <span className={`text-sm font-bold ${telemetry.market_regime === "TRENDING" ? "text-cyan-400" : telemetry.market_regime === "SQUEEZE" ? "text-fuchsia-400" : "text-amber-400"}`}>
-                    {telemetry.market_regime}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2 border border-border/20 rounded bg-background/50">
+                  <span className="text-[9px] text-muted-foreground uppercase block">Regime</span>
+                  <span className="font-bold text-cyan-400">{telemetry.market_regime}</span>
+                </div>
+                <div className="p-2 border border-border/20 rounded bg-background/50">
+                  <span className="text-[9px] text-muted-foreground uppercase block">Structure</span>
+                  <span className="font-bold text-foreground">{telemetry.structure}</span>
+                </div>
+                <div className="p-2 border border-border/20 rounded bg-background/50">
+                  <span className="text-[9px] text-muted-foreground uppercase block">Vol Delta</span>
+                  <span className={`font-bold ${telemetry.volume_delta >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                    {telemetry.volume_delta.toLocaleString()} Δ
                   </span>
                 </div>
-                
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Structure</span>
-                  <span className="text-sm font-bold text-foreground">
-                    {telemetry.structure}
-                  </span>
-                </div>
-
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Footprint Delta</span>
-                  <span className={`text-sm font-bold ${Number(telemetry.volume_delta) > 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                    {telemetry.volume_delta ? Number(telemetry.volume_delta).toLocaleString() : "0"}
-                  </span>
-                </div>
-
-                <div className="p-3 border border-border/20 rounded-lg bg-background/50">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest block mb-1">Inst. Magnet</span>
-                  <span className="text-sm font-bold text-amber-400">
-                    ${telemetry.magnet_node ? Number(telemetry.magnet_node).toFixed(2) : "0.00"}
-                  </span>
+                <div className="p-2 border border-border/20 rounded bg-background/50">
+                  <span className="text-[9px] text-muted-foreground uppercase block">Inst Magnet</span>
+                  <span className="font-bold text-amber-400">${telemetry.magnet_node.toFixed(2)}</span>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* BURNER / FUNDAMENTAL + TECHNICAL CONFLUENCE MATRIX */}
+        {/* TRIPLE-FUSION BURNER TAB */}
         {activeTab === "BURNER" && (
-          <div className="flex flex-col gap-4 h-full font-mono">
-            <div className="p-4 border border-orange-900/40 bg-orange-950/10 rounded-xl flex flex-col gap-3 shadow-sm">
+          <div className="flex flex-col gap-4 font-mono">
+            <div className="p-4 border border-orange-900/40 bg-orange-950/10 rounded-xl flex flex-col gap-2">
               <div className="flex items-center justify-between border-b border-orange-900/30 pb-2">
                 <div className="flex items-center gap-2">
                   <Flame size={18} className="text-orange-500 animate-pulse" />
-                  <h3 className="text-xs font-bold text-orange-400 uppercase tracking-wider">Fundamental + Technical Confluence</h3>
+                  <h3 className="text-xs font-bold text-orange-400 uppercase">Triple-Fusion Macro & AI Engine</h3>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-bold border border-orange-500/30">
-                  $50 Fixed Margin
-                </span>
+                <Button onClick={fetchBurnerPredictions} disabled={syncingMacro} size="sm" variant="ghost" className="h-6 text-[10px]">
+                  <RefreshCw size={12} className={`mr-1 ${syncingMacro ? "animate-spin" : ""}`} /> Sync Context
+                </Button>
               </div>
-
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Evaluates High & Medium impact USD events within a strict <strong>15-minute pre-release window</strong> against active M15 market structure, Breaker Blocks, and institutional volume delta before executing pre-news positions.
+              <p className="text-[11px] text-muted-foreground">
+                Evaluates USD news events in a 15-minute window via <strong>Fundamental + Technical + Gemini 2.0 Flash AI</strong> semantic analysis.
               </p>
             </div>
 
-            {/* CONFLUENCE PREDICTION CARDS */}
-            <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-border/50 pb-2">
-                <div className="flex items-center gap-2">
-                  <Zap size={14} className="text-orange-400" />
-                  <h3 className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Active T-15m Macro Signals ({burnerPredictions.length})</h3>
+            <div className="space-y-3">
+              {burnerPredictions.length === 0 ? (
+                <div className="text-xs text-muted-foreground text-center py-10 bg-zinc-950/50 rounded-xl border border-dashed border-border/40">
+                  No active USD High/Medium events within the 15-minute pre-release window.
                 </div>
-                <Button 
-                  onClick={handleTriggerMacroSync} 
-                  disabled={syncingMacro}
-                  size="sm" 
-                  variant="ghost" 
-                  className={`h-6 text-[10px] text-muted-foreground ${syncingMacro ? "opacity-50" : ""}`}
-                >
-                  <RefreshCw size={12} className={`mr-1 ${syncingMacro ? "animate-spin" : ""}`} /> 
-                  {syncingMacro ? "Syncing..." : "Sync Context"}
-                </Button>
-              </div>
+              ) : (
+                burnerPredictions.map((pred) => (
+                  <div key={pred.event_id} className="p-3.5 bg-zinc-950 border border-amber-500/40 rounded-xl flex flex-col gap-3">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-sm">{pred.event_name}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                        {pred.confluence_grade}
+                      </span>
+                    </div>
 
-              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                {burnerPredictions.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-10 bg-zinc-950/50 rounded-xl border border-dashed border-border/40 flex flex-col items-center justify-center gap-2">
-                    <span className="text-orange-400 font-bold">T-15m Execution Window Standby</span>
-                    <span className="text-[11px] text-slate-400 max-w-xs text-center">No USD High/Medium impact events within the 15-minute pre-release window. System standing by...</span>
-                  </div>
-                ) : (
-                  burnerPredictions.map((pred: any) => {
-                    const isBuy = pred.predicted_action.includes("BUY");
-                    const isGradeA = pred.confidence_pct >= 85;
-
-                    return (
-                      <div key={pred.event_id} className={`p-3.5 bg-zinc-950 border rounded-xl flex flex-col gap-3 transition-all ${
-                        isGradeA ? "border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)]" : "border-border/40"
-                      }`}>
-                        {/* Event Header & Action Badge */}
-                        <div className="flex justify-between items-center flex-wrap gap-2">
-                          <div>
-                            <span className="font-bold text-sm text-foreground">{pred.event_name}</span>
-                            <span className="text-[10px] text-muted-foreground ml-2">({pred.time_str})</span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                              isGradeA ? "bg-amber-500/20 text-amber-300 border-amber-500/40" : "bg-slate-800 text-slate-400 border-slate-700"
-                            }`}>
-                              {pred.confluence_grade}
-                            </span>
-
-                            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
-                              isBuy ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400" : "bg-rose-500/10 border-rose-500/40 text-rose-400"
-                            }`}>
-                              {isBuy ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                              <span>{pred.predicted_action}</span>
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Macro & Technical Breakdown Grid - Side by Side */}
-                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-background/50 p-2.5 rounded-lg border border-border/30 h-full">
-                          <div className="space-y-1.5 pr-2">
-                            <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">1. Fundamental Bias</span>
-                            <p className="text-slate-300">Prev: <strong className="text-foreground">{pred.previous}</strong> | Forecast: <strong className="text-cyan-400">{pred.forecast}</strong></p>
-                            <p className="text-slate-400 italic leading-relaxed">{pred.fundamental_rationale}</p>
-                          </div>
-
-                          <div className="space-y-1.5 border-l border-border/20 pl-3">
-                            <span className="text-muted-foreground font-bold uppercase block border-b border-border/20 pb-0.5">2. Technical Structure</span>
-                            <p className="text-slate-300">Regime: <strong className="text-amber-400">{pred.market_regime}</strong> | Score: <strong className="text-emerald-400">{pred.confidence_pct}%</strong></p>
-                            <p className="text-slate-400 italic leading-relaxed">{pred.technical_rationale}</p>
-                          </div>
-                        </div>
-
-                        {/* Fire Button */}
-                        <div className="pt-1 flex justify-end">
-                          <Button
-                            size="sm"
-                            disabled={executingBurner}
-                            onClick={() => handleFireBurner(pred)}
-                            className="h-8 text-[10px] bg-orange-600 hover:bg-orange-500 text-white font-bold tracking-wider uppercase shadow-md shadow-orange-950/40"
-                          >
-                            <Flame className="w-3.5 h-3.5 mr-1" /> FIRE $50 BURNER (CONFLUENCE {pred.confidence_pct}%)
-                          </Button>
-                        </div>
+                    <div className="space-y-1.5 text-[10px] bg-background/50 p-2.5 rounded-lg border border-border/30">
+                      <p className="text-slate-300">Fundamental: {pred.fundamental_rationale}</p>
+                      <p className="text-slate-300">Technical: {pred.technical_rationale}</p>
+                      <div className="flex items-center gap-1 text-cyan-400 pt-1 border-t border-border/20">
+                        <Bot size={12} />
+                        <span className="italic">Gemini AI: {pred.gemini_ai_rationale}</span>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      disabled={executingBurner}
+                      onClick={() => handleFireBurner(pred)}
+                      className="h-8 text-[10px] bg-orange-600 hover:bg-orange-500 text-white font-bold uppercase"
+                    >
+                      <Flame className="w-3.5 h-3.5 mr-1" /> FIRE $50 BURNER ({pred.confidence_pct}% CONFIDENCE)
+                    </Button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
 
-        {/* JOURNAL */}
+        {/* JOURNAL TAB */}
         {activeTab === "JOURNAL" && (
           <div className="flex flex-col gap-4 h-full">
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
@@ -857,7 +770,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* CALCULATOR / SIZER */}
+        {/* CALCULATOR / SIZER TAB */}
         {activeTab === "CALCULATOR" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm">
             <div className="flex justify-between items-center border-b border-border/50 pb-3 mb-5">
@@ -910,7 +823,7 @@ export default function QuantTerminal() {
           </div>
         )}
 
-        {/* CONTROLS */}
+        {/* CONTROLS TAB */}
         {activeTab === "CONTROLS" && (
           <div className="w-full max-w-md mx-auto p-5 border border-border/50 rounded-xl bg-card shadow-sm flex flex-col gap-6">
             <div>
@@ -943,33 +856,27 @@ export default function QuantTerminal() {
       </main>
 
       {/* BOTTOM NAV */}
-      <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 pb-safe shrink-0 z-40">
-        <div className="flex justify-around items-center h-16 max-w-md mx-auto px-2">
-          <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <Activity size={20} strokeWidth={activeTab === "TERMINAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Terminal</span>
-          </button>
-          
-          <button onClick={() => setActiveTab("JOURNAL")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "JOURNAL" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <BookText size={20} strokeWidth={activeTab === "JOURNAL" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Journal</span>
-          </button>
-
-          <button onClick={() => setActiveTab("CALCULATOR")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CALCULATOR" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <Calculator size={20} strokeWidth={activeTab === "CALCULATOR" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Sizer</span>
-          </button>
-
-          <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground hover:text-primary/70"}`}>
-            <ShieldAlert size={20} strokeWidth={activeTab === "CONTROLS" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Controls</span>
-          </button>
-
-          <button onClick={() => setActiveTab("BURNER")} className={`flex flex-col items-center justify-center w-full h-full gap-1 transition-colors ${activeTab === "BURNER" ? "text-orange-500" : "text-muted-foreground hover:text-orange-500/70"}`}>
-            <Flame size={20} strokeWidth={activeTab === "BURNER" ? 2.5 : 2} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Burner</span>
-          </button>
-        </div>
+      <nav className="fixed bottom-0 w-full bg-card border-t border-border/50 h-16 z-40 flex justify-around items-center">
+        <button onClick={() => setActiveTab("TERMINAL")} className={`flex flex-col items-center gap-1 ${activeTab === "TERMINAL" ? "text-primary" : "text-muted-foreground"}`}>
+          <Activity size={20} />
+          <span className="text-[9px] font-bold uppercase">Terminal</span>
+        </button>
+        <button onClick={() => setActiveTab("JOURNAL")} className={`flex flex-col items-center gap-1 ${activeTab === "JOURNAL" ? "text-primary" : "text-muted-foreground"}`}>
+          <BookText size={20} />
+          <span className="text-[9px] font-bold uppercase">Journal</span>
+        </button>
+        <button onClick={() => setActiveTab("CALCULATOR")} className={`flex flex-col items-center gap-1 ${activeTab === "CALCULATOR" ? "text-primary" : "text-muted-foreground"}`}>
+          <Calculator size={20} />
+          <span className="text-[9px] font-bold uppercase">Sizer</span>
+        </button>
+        <button onClick={() => setActiveTab("CONTROLS")} className={`flex flex-col items-center gap-1 ${activeTab === "CONTROLS" ? "text-primary" : "text-muted-foreground"}`}>
+          <ShieldAlert size={20} />
+          <span className="text-[9px] font-bold uppercase">Controls</span>
+        </button>
+        <button onClick={() => setActiveTab("BURNER")} className={`flex flex-col items-center gap-1 ${activeTab === "BURNER" ? "text-orange-500" : "text-muted-foreground"}`}>
+          <Flame size={20} />
+          <span className="text-[9px] font-bold uppercase">Burner</span>
+        </button>
       </nav>
     </div>
   );
