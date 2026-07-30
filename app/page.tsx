@@ -503,12 +503,12 @@ export default function QuantTerminal() {
         </div>
       </header>
 
-      {/* MAIN CANVAS */}
-      <main className="flex-1 overflow-y-auto p-4 pb-24">
+      {/* MAIN CANVAS WITH UNRESTRICTED BOTTOM SCROLLING CLEARANCE */}
+      <main className="flex-1 overflow-y-auto p-4 pb-28">
         
         {/* TERMINAL TAB */}
         {activeTab === "TERMINAL" && (
-          <div className="flex flex-col gap-4 h-full">
+          <div className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-2">
               <button 
                 onClick={handleUpdateEquityManual} 
@@ -652,7 +652,7 @@ export default function QuantTerminal() {
             </div>
 
             {/* TELEMETRY MATRIX HUD */}
-            <div className="border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner p-3">
+            <div className="border border-border/30 rounded-xl bg-zinc-950/80 shadow-inner p-3 mb-4">
               <div className="flex items-center justify-between border-b border-border/30 pb-2 mb-3">
                 <div className="flex items-center gap-2">
                   <Activity size={14} className="text-primary" />
@@ -744,7 +744,7 @@ export default function QuantTerminal() {
 
         {/* JOURNAL TAB */}
         {activeTab === "JOURNAL" && (
-          <div className="flex flex-col gap-4 h-full">
+          <div className="flex flex-col gap-4">
             <div className="p-4 border border-border/50 rounded-xl bg-card shadow-sm">
                 <div className="flex items-center gap-2 border-b border-border/50 pb-2 mb-4">
                     <BookText size={16} className="text-primary" />
