@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, CheckCircle2, X, Edit3, TrendingUp, TrendingDown, Zap, RefreshCw, Bot } from "lucide-react"; 
+import { Activity, Calculator, ShieldAlert, Target, BookText, Flame, Lock, CheckCircle2, X, Edit3, RefreshCw, Bot } from "lucide-react"; 
 
 interface RiskConfig {
   total_equity: number;
@@ -58,7 +58,7 @@ interface NewsPrediction {
   volume_delta: number;
 }
 
-const backendUrl = "[https://nexus-neural-machine-backend-production.up.railway.app](https://nexus-neural-machine-backend-production.up.railway.app)";
+const backendUrl = "https://nexus-neural-machine-backend-production.up.railway.app";
 
 export default function QuantTerminal() {
   const [activeTab, setActiveTab] = useState<"TERMINAL" | "CALCULATOR" | "CONTROLS" | "JOURNAL" | "BURNER">("TERMINAL");
@@ -137,7 +137,7 @@ export default function QuantTerminal() {
         });
       }
 
-      // Live Dynamic Quant Telemetry Matrix Fetch
+      // Dynamic Quant Telemetry Matrix Fetch directly from /api/telemetry
       try {
         const telRes = await fetch(`${backendUrl}/api/telemetry`);
         if (telRes.ok) {
@@ -327,7 +327,7 @@ export default function QuantTerminal() {
       });
 
       if (res.ok) {
-        alert(`🔥 Burner trade executed for ${pred.event_name}!`);
+        alert(`Burner trade executed for ${pred.event_name}!`);
         setActiveTab("TERMINAL");
         fetchDashboardData();
       } else {
