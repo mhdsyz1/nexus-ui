@@ -23,6 +23,24 @@ export const MAGNET_TRAP_ATR_MULT = 0.5;
 /** Telemetry poll cadences (ms) */
 export const POLL_TELEMETRY_MS = 4_000;
 export const POLL_SUPABASE_MS = 10_000;
+export const POLL_QUEUE_MS = 5_000;
+export const POLL_MACRO_MS = 300_000; // 5 min — schedule refreshes 2-hourly server-side
+
+/** main.py — automated_parole_worker: kill switch auto-restores after 12h */
+export const PAROLE_HOURS = 12;
+
+/** telegram_bot.py / legacy sizer — $ per 1.00 price move per lot (XAUUSD) */
+export const PIP_VALUE_PER_LOT = 100;
+
+/** trading_state.py — tiered risk percentages returned by the engine */
+export const RISK_TIERS = [
+  { tier: "T1", pct: 0.02 },
+  { tier: "T2", pct: 0.04 },
+  { tier: "T3", pct: 0.06 },
+] as const;
+
+/** localStorage key — matches the legacy page so existing devices keep working */
+export const ADMIN_KEY_STORAGE = "NEXUS_WEBHOOK_SECRET";
 
 /** Points of delta history retained for the pressure sparkline */
 export const DELTA_HISTORY_LEN = 30;

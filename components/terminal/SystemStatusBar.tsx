@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useRiskConfig } from "@/hooks/useSupabaseReads";
 import { useSessionState } from "@/hooks/useSessionState";
+import { useFailsafeState } from "@/hooks/useFailsafe";
 import type { SessionName } from "@/lib/quant/constants";
 
 const SESSION_LABEL: Record<SessionName, string> = {
@@ -59,28 +60,48 @@ function EquityTicker({ equity }: { equity: number }) {
 }
 
 /**
- * Master system state chip. Phase 1 renders ARMED / KILLED from
- * risk_configuration; the EMBARGO state joins in Phase 3 when the
- * FailsafePanel wires /api/macro-schedule into this chip.
+ * Master system state chip — 3-state, priority KILLED > EMBARGO >
+ * ARMED, fed by useFailsafeState. During parole it carries the
+ * countdown; during embargo, minutes to unlock.
  */
-function SystemStateChip({ killed }: { killed: boolean }) {
+function SystemStateChip() {
+  const fs = useFailsafeState();
+  const color =
+    fs.mode === "KILLED"
+      ? "var(--qt-short)"
+      : fs.mode === "EMBARGO"
+        ? "var(--qt-warn)"
+        : "var(--qt-long)";
+  const label =
+    fs.mode === "KILLED"
+      ? fs.parole.active
+        ? `KILLED · ${fs.parole.label}`
+        : "KILLED"
+      : fs.mode === "EMBARGO"
+        ? `EMBARGO · ${Math.ceil(fs.embargoRemainingSec / 60)}m`
+        : "ARMED";
+
   return (
     <span
       className={[
-        "qt-num flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold tracking-[0.14em]",
-        killed ? "" : "qt-armed-ring",
+        "qt-num flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold tracking-[0.14em] whitespace-nowrap",
+        fs.mode === "ARMED" ? "qt-armed-ring" : "",
       ].join(" ")}
       style={{
-        color: killed ? "var(--qt-short)" : "var(--qt-long)",
-        background: killed ? "rgb(244 63 94 / 0.10)" : "rgb(16 185 129 / 0.08)",
-        border: `1px solid ${killed ? "rgb(244 63 94 / 0.4)" : "rgb(16 185 129 / 0.35)"}`,
+        color,
+        background: `color-mix(in srgb, ${color} 9%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
       }}
+      title={
+        fs.mode === "EMBARGO" && fs.embargoEvent
+          ? `Macro embargo: ${fs.embargoEvent.event_name}`
+          : fs.mode === "KILLED"
+            ? "Kill switch active — parole running"
+            : "All failsafes clear"
+      }
     >
-      <span
-        className="w-1.5 h-1.5 rounded-full"
-        style={{ background: killed ? "var(--qt-short)" : "var(--qt-long)" }}
-      />
-      {killed ? "KILLED" : "ARMED"}
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+      {label}
     </span>
   );
 }
@@ -146,7 +167,7 @@ export function SystemStatusBar() {
           <span className="qt-label">Equity</span>
           <EquityTicker equity={config.total_equity} />
         </div>
-        <SystemStateChip killed={config.system_is_killed} />
+        <SystemStateChip />
       </div>
     </header>
   );

@@ -3,26 +3,23 @@
 import { QuantProviders } from "@/lib/quant/providers";
 import { QuantTerminalShell } from "@/components/terminal/QuantTerminalShell";
 import { TelemetryMatrix } from "@/components/terminal/TelemetryMatrix";
+import { ActivePositionTheater } from "@/components/terminal/ActivePositionTheater";
+import { SignalQueue } from "@/components/terminal/SignalQueue";
+import { FailsafePanel } from "@/components/terminal/FailsafePanel";
+import { AdminKeyDialog } from "@/components/terminal/AdminKeyDialog";
 import { useTerminalStore } from "@/lib/quant/store";
+import { useQueue } from "@/hooks/useQueue";
 
 /**
- * PHASE 1 BUILD — Foundation, Shell, Telemetry.
- *
- * Phases still to land in their approved order:
- *   3. FailsafePanel      → CONTROLS view + embargo state in status chip
- *   4. PositionTheater +
- *      SignalQueue        → TERMINAL view, below telemetry
- *   5. TripleFusionConsole→ BURNER view
- *   6. AuthVault + Sonner → global
- *
- * Keep the legacy page as app/page-legacy.tsx until Phase 6 completes,
- * so accept/drop/close/kill actions remain reachable during the migration.
+ * PHASE 2 BUILD — Failsafe & Risk (Step 3) + Execution (Step 4).
+ * Remaining: Phase 5 TripleFusionConsole (BURNER), Phase 6 AuthVault
+ * polish + Sonner, Analytics view (equity curve / journal stream).
  */
 
 function ReservedSlot({ title, phase }: { title: string; phase: number }) {
   return (
     <div
-      className="qt-card flex flex-col items-center justify-center gap-1 py-10 border-dashed"
+      className="qt-card flex flex-col items-center justify-center gap-1 py-10"
       style={{ borderStyle: "dashed", borderColor: "var(--qt-border-strong)" }}
     >
       <span className="qt-label">{title}</span>
@@ -33,28 +30,33 @@ function ReservedSlot({ title, phase }: { title: string; phase: number }) {
   );
 }
 
+function TerminalView() {
+  const { activeTrade, pending, resolved } = useQueue();
+  return (
+    <div className="flex flex-col gap-4 max-w-[1400px] mx-auto">
+      <TelemetryMatrix />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 items-start">
+        <ActivePositionTheater trade={activeTrade} />
+        <SignalQueue pending={pending} resolved={resolved} locked={!!activeTrade} />
+      </div>
+    </div>
+  );
+}
+
 function MainViewport() {
   const activeView = useTerminalStore((s) => s.activeView);
 
   switch (activeView) {
     case "TERMINAL":
-      return (
-        <div className="flex flex-col gap-4 max-w-[1400px] mx-auto">
-          <TelemetryMatrix />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
-            <ReservedSlot title="Active Position Theater" phase={4} />
-            <ReservedSlot title="Signal Queue" phase={4} />
-          </div>
-        </div>
-      );
+      return <TerminalView />;
     case "BURNER":
       return <ReservedSlot title="Triple-Fusion Console" phase={5} />;
     case "ANALYTICS":
-      return <ReservedSlot title="Equity Curve · Performance · Journal" phase={4} />;
+      return <ReservedSlot title="Equity Curve · Performance · Journal" phase={5} />;
     case "SIZER":
-      return <ReservedSlot title="Position Sizer" phase={4} />;
+      return <ReservedSlot title="Position Sizer" phase={5} />;
     case "CONTROLS":
-      return <ReservedSlot title="Failsafe Panel" phase={3} />;
+      return <FailsafePanel />;
   }
 }
 
@@ -64,6 +66,7 @@ export default function QuantTerminal() {
       <QuantTerminalShell>
         <MainViewport />
       </QuantTerminalShell>
+      <AdminKeyDialog />
     </QuantProviders>
   );
 }

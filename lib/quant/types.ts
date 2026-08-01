@@ -38,6 +38,8 @@ export interface QueueItem {
   action: string;
   status: string;
   created_at: string;
+  score?: number;
+  confidence?: string;
   entry_price?: number;
   zone_low?: number;
   zone_high?: number;
@@ -63,6 +65,22 @@ export interface SignalContext {
   structure: string | null;
   asOf: string | null;
 }
+
+/** GET /api/macro-schedule — RED_FOLDER_SCHEDULE entries (main.py) */
+export interface MacroEvent {
+  event_id: string;
+  event_name: string;
+  impact: string;
+  timestamp_utc: number;
+  time_str: string;
+  forecast: number;
+  previous: number;
+  embargo_start: number; // unix s — event − 15 min
+  embargo_end: number;   // unix s — event + 5 min
+}
+
+/** Master failsafe state, priority KILLED > EMBARGO > ARMED */
+export type FailsafeMode = "ARMED" | "KILLED" | "EMBARGO";
 
 export type TerminalView =
   | "TERMINAL"
