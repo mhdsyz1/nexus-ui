@@ -3,24 +3,20 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { adminFetch, AdminAuthError } from "@/lib/quant/adminFetch";
-import { getAdminKeySync } from "@/lib/quant/store";
+import { useTerminalStore } from "@/lib/quant/store";
 import { PAROLE_HOURS, POLL_MACRO_MS } from "@/lib/quant/constants";
 import { useRiskConfig } from "./useSupabaseReads";
 import type { FailsafeMode, MacroEvent } from "@/lib/quant/types";
 
 /**
  * Red Folder schedule (main.py RED_FOLDER_SCHEDULE). The endpoint is
- * admin-authed; the query only runs once a key is stored, so opening
- * CONTROLS never force-prompts — the timeline shows an unlock hint
- * instead, and any authed action elsewhere unlocks it.
+ * admin-authed; the query only runs once a token is in the vault, so
+ * opening CONTROLS never force-prompts — the timeline shows an unlock
+ * hint instead, and any authed action elsewhere unlocks it. The vault
+ * cache is reactive (Zustand), so no storage polling is needed.
  */
 export function useMacroSchedule() {
-  const [hasKey, setHasKey] = useState(false);
-  useEffect(() => {
-    setHasKey(Boolean(getAdminKeySync()));
-    const id = setInterval(() => setHasKey(Boolean(getAdminKeySync())), 2000);
-    return () => clearInterval(id);
-  }, []);
+  const hasKey = useTerminalStore((s) => Boolean(s.cachedToken));
 
   const query = useQuery({
     queryKey: ["macro-schedule"],

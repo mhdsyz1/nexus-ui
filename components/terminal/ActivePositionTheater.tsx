@@ -199,9 +199,11 @@ function CloseTradeDialog({ trade, onClose }: { trade: QueueItem | null; onClose
           style={qtInputStyle}
         />
 
-        {mutation.error && (
+        {mutation.isError && (
           <p className="qt-num text-[10px]" style={{ color: "var(--qt-short)" }}>
-            {mutation.error instanceof AdminAuthError ? (mutation.error as Error).message : "Close failed — engine rejected or unreachable."}
+            {mutation.error instanceof AdminAuthError
+              ? String((mutation.error as Error).message)
+              : "Close failed — engine rejected or unreachable."}
           </p>
         )}
 

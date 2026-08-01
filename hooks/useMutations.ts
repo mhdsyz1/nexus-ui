@@ -1,9 +1,18 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
-import { adminFetch } from "@/lib/quant/adminFetch";
+import { adminFetch, AdminAuthError } from "@/lib/quant/adminFetch";
+import { PAROLE_HOURS } from "@/lib/quant/constants";
 import type { QueueItem } from "@/lib/quant/types";
+
+/** Uniform error surfacing: auth cancellations stay quiet-ish, real failures shout */
+function toastError(e: unknown, fallback: string) {
+  const msg =
+    e instanceof AdminAuthError ? (e as Error).message : (e as Error)?.message || fallback;
+  toast.error(msg);
+}
 
 /** Optimistically rewrite one queue row's status, with rollback token */
 function useOptimisticStatus() {
@@ -34,7 +43,11 @@ export function useAcceptTrade() {
       await adminFetch("/api/accept-trade", { trade_id: tradeId });
     },
     onMutate: (tradeId: string) => opt.apply(tradeId, "ACTIVE"),
-    onError: (_e: unknown, _v: string, ctx: any) => opt.rollback(ctx),
+    onSuccess: () => toast.success("Signal accepted — position lock engaged, auto-pilot monitoring"),
+    onError: (e: unknown, _v: string, ctx: any) => {
+      opt.rollback(ctx);
+      toastError(e, "Accept failed — row restored");
+    },
     onSettled: () => opt.settle(),
   });
 }
@@ -46,7 +59,11 @@ export function useDropTrade() {
       await adminFetch("/api/drop-trade", { trade_id: tradeId });
     },
     onMutate: (tradeId: string) => opt.apply(tradeId, "DROPPED"),
-    onError: (_e: unknown, _v: string, ctx: any) => opt.rollback(ctx),
+    onSuccess: () => toast.success("Signal dropped"),
+    onError: (e: unknown, _v: string, ctx: any) => {
+      opt.rollback(ctx);
+      toastError(e, "Drop failed — row restored");
+    },
     onSettled: () => opt.settle(),
   });
 }
@@ -73,7 +90,13 @@ export function useCloseTrade() {
         outcome,
         realized_pnl: realizedPnl,
       });
+      return { outcome, realizedPnl };
     },
+    onSuccess: ({ outcome, realizedPnl }: { outcome: string; realizedPnl: number }) =>
+      toast.success(
+        `Position closed ${outcome} · ${realizedPnl >= 0 ? "+" : "−"}$${Math.abs(realizedPnl).toFixed(2)} — ledger updated, queue unlocked`,
+      ),
+    onError: (e: unknown) => toastError(e, "Close failed — position remains active"),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["queue"] });
       qc.invalidateQueries({ queryKey: ["risk-config"] });
@@ -86,7 +109,13 @@ export function useKillSwitch() {
   return useMutation({
     mutationFn: async (action: "ACTIVATE" | "DEACTIVATE") => {
       await adminFetch("/kill-switch", { action });
+      return action;
     },
+    onSuccess: (action: "ACTIVATE" | "DEACTIVATE") =>
+      action === "ACTIVATE"
+        ? toast.error(`KILL SWITCH ACTIVE — ${PAROLE_HOURS}h parole started`, { duration: 6000 })
+        : toast.success("System restored — engine armed"),
+    onError: (e: unknown) => toastError(e, "Kill-switch command failed"),
     onSettled: () => qc.invalidateQueries({ queryKey: ["risk-config"] }),
   });
 }

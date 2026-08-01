@@ -83,3 +83,9 @@
 @media (prefers-reduced-motion: reduce) {
   .qt-armed-ring, .qt-squeeze-cell { animation: none; }
 }
+
+/* Sonner toast accents (Phase 5) */
+.qt-toast-success { border-color: rgb(16 185 129 / 0.5) !important; }
+.qt-toast-success [data-icon] { color: var(--qt-long); }
+.qt-toast-error { border-color: rgb(244 63 94 / 0.5) !important; }
+.qt-toast-error [data-icon] { color: var(--qt-short); }

@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Bot, Flame, Radar, CheckCircle2, XCircle, AlertTriangle, HelpCircle, CalendarClock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useSignalContext } from "@/hooks/useSupabaseReads";
 import { useRiskConfig } from "@/hooks/useSupabaseReads";
@@ -203,12 +204,14 @@ export function TripleFusionConsole() {
         { tokenInBody: true },
       );
       qc.invalidateQueries({ queryKey: ["queue"] });
-      setResult({ ok: true, msg: "Signal accepted — gauntlet passed. Auto-pilot is now monitoring; Telegram traffic-light sent." });
+      const okMsg = "Signal accepted — gauntlet passed. Auto-pilot is now monitoring; Telegram traffic-light sent.";
+      setResult({ ok: true, msg: okMsg });
+      toast.success(okMsg);
     } catch (e) {
-      setResult({
-        ok: false,
-        msg: e instanceof AdminAuthError ? (e as Error).message : `Engine rejected: ${(e as Error).message}`,
-      });
+      const errMsg =
+        e instanceof AdminAuthError ? (e as Error).message : `Engine rejected: ${(e as Error).message}`;
+      setResult({ ok: false, msg: errMsg });
+      toast.error(errMsg);
     } finally {
       setBusy(false);
     }

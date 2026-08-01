@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { motion, useReducedMotion } from "framer-motion";
 import { ShieldCheck, ShieldOff, TimerReset, CalendarClock, Edit3, Lock } from "lucide-react";
 import { useFailsafeState } from "@/hooks/useFailsafe";
@@ -174,8 +175,11 @@ export function FailsafePanel() {
     try {
       await adminFetch("/api/update-equity", { total_equity: v });
       setEquityOpen(false); setEquityValue("");
+      toast.success(`Equity ledger set to $${v.toFixed(2)}`);
     } catch (e) {
-      setEquityError(e instanceof AdminAuthError ? e.message : "Update failed — engine unreachable or rejected.");
+      const msg = e instanceof AdminAuthError ? e.message : "Update failed — engine unreachable or rejected.";
+      setEquityError(msg);
+      toast.error(msg);
     } finally {
       setEquityBusy(false);
     }
