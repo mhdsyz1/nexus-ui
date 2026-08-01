@@ -46,6 +46,7 @@ export interface QueueItem {
   zone_high?: number;
   stop_loss?: number;
   take_profit?: number;
+  take_profit_1?: number;
   atr_volatility?: number;
   market_regime?: string;
   volume_delta?: number;
@@ -53,7 +54,6 @@ export interface QueueItem {
   structure?: string;
   realized_pnl?: number;
   trade_layers?: TradeLayer[];
-  take_profit_1?: number;
 }
 
 /**
@@ -116,4 +116,5 @@ export type TerminalView =
   | "BURNER"
   | "ANALYTICS"
   | "SIZER"
-  | "CONTROLS";
+  | "CONTROLS"
+  | "MENTOR";

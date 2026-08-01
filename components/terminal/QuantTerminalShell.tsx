@@ -7,6 +7,7 @@ import {
   LineChart,
   Calculator,
   ShieldAlert,
+  GraduationCap,
 } from "lucide-react";
 import { useTerminalStore } from "@/lib/quant/store";
 import type { TerminalView } from "@/lib/quant/types";
@@ -15,6 +16,7 @@ import { SystemStatusBar } from "./SystemStatusBar";
 const NAV: { view: TerminalView; label: string; icon: typeof Activity }[] = [
   { view: "TERMINAL", label: "Terminal", icon: Activity },
   { view: "BURNER", label: "Burner", icon: Flame },
+  { view: "MENTOR", label: "Mentor", icon: GraduationCap },
   { view: "ANALYTICS", label: "Analytics", icon: LineChart },
   { view: "SIZER", label: "Sizer", icon: Calculator },
   { view: "CONTROLS", label: "Controls", icon: ShieldAlert },

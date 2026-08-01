@@ -12,6 +12,7 @@ import { PerformanceGrid } from "@/components/terminal/PerformanceGrid";
 import { EquityCurveChart } from "@/components/terminal/EquityCurveChart";
 import { JournalStream } from "@/components/terminal/JournalStream";
 import { AdminKeyDialog } from "@/components/terminal/AdminKeyDialog";
+import { AiMentor } from "@/components/terminal/AiMentor";
 import { useTerminalStore } from "@/lib/quant/store";
 import { useQueue } from "@/hooks/useQueue";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -53,6 +54,8 @@ function MainViewport() {
       return <TerminalView />;
     case "BURNER":
       return <TripleFusionConsole />;
+    case "MENTOR":
+      return <AiMentor />;
     case "ANALYTICS":
       return <AnalyticsView />;
     case "SIZER":
