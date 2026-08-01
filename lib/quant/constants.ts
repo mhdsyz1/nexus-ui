@@ -42,6 +42,16 @@ export const RISK_TIERS = [
 /** localStorage key — matches the legacy page so existing devices keep working */
 export const ADMIN_KEY_STORAGE = "NEXUS_WEBHOOK_SECRET";
 
+/** main.py process_smart_risk_geometry — mirrored for pre-flight preview only */
+export const SL_BUFFER_USD = 2.5;   // 25-pip cushion behind the structural wick
+export const MAX_RISK_USD = 10.0;   // 100-pip max risk distance
+export const ENGINE_RR = 3.0;       // engine enforces TP at 3R
+
+/** XAUUSD convention in this codebase: 100 pips = $10.00 → 1 pip = $0.10 */
+export const USD_PER_PIP = 0.1;
+
+export const POLL_PREDICTIONS_MS = 30_000;
+
 /** Points of delta history retained for the pressure sparkline */
 export const DELTA_HISTORY_LEN = 30;
 

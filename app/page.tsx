@@ -6,14 +6,16 @@ import { TelemetryMatrix } from "@/components/terminal/TelemetryMatrix";
 import { ActivePositionTheater } from "@/components/terminal/ActivePositionTheater";
 import { SignalQueue } from "@/components/terminal/SignalQueue";
 import { FailsafePanel } from "@/components/terminal/FailsafePanel";
+import { TripleFusionConsole } from "@/components/terminal/TripleFusionConsole";
+import { PositionSizer } from "@/components/terminal/PositionSizer";
 import { AdminKeyDialog } from "@/components/terminal/AdminKeyDialog";
 import { useTerminalStore } from "@/lib/quant/store";
 import { useQueue } from "@/hooks/useQueue";
 
 /**
- * PHASE 2 BUILD — Failsafe & Risk (Step 3) + Execution (Step 4).
- * Remaining: Phase 5 TripleFusionConsole (BURNER), Phase 6 AuthVault
- * polish + Sonner, Analytics view (equity curve / journal stream).
+ * PHASE 3 BUILD — TripleFusionConsole (BURNER) + PositionSizer (SIZER).
+ * Remaining: Analytics view (equity curve / journal stream) and the
+ * Phase 6 AuthVault polish + Sonner sweep.
  */
 
 function ReservedSlot({ title, phase }: { title: string; phase: number }) {
@@ -50,11 +52,11 @@ function MainViewport() {
     case "TERMINAL":
       return <TerminalView />;
     case "BURNER":
-      return <ReservedSlot title="Triple-Fusion Console" phase={5} />;
+      return <TripleFusionConsole />;
     case "ANALYTICS":
       return <ReservedSlot title="Equity Curve · Performance · Journal" phase={5} />;
     case "SIZER":
-      return <ReservedSlot title="Position Sizer" phase={5} />;
+      return <PositionSizer />;
     case "CONTROLS":
       return <FailsafePanel />;
   }

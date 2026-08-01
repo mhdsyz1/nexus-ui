@@ -20,15 +20,24 @@ export async function adminFetch(
   path: string,
   body: unknown,
   method: "POST" | "GET" = "POST",
+  opts: { tokenInBody?: boolean } = {},
 ): Promise<Response> {
   const { requestAdminKey, clearAdminKey } = useTerminalStore.getState();
   const key = await requestAdminKey();
   if (!key) throw new AdminAuthError("Action cancelled — no key provided");
 
+  // /webhook validates payload.secret_token in the BODY (the X-Admin-Key
+  // header only bypasses the IP whitelist), so the token is injected here
+  // and never handled by calling components.
+  const finalBody =
+    opts.tokenInBody && body && typeof body === "object"
+      ? { ...(body as Record<string, unknown>), secret_token: key }
+      : body;
+
   const res = await fetch(`${BACKEND_URL}${path}`, {
     method,
     headers: { "Content-Type": "application/json", "X-Admin-Key": key },
-    body: method === "GET" ? undefined : JSON.stringify(body),
+    body: method === "GET" ? undefined : JSON.stringify(finalBody),
     cache: "no-store",
   });
 

@@ -79,6 +79,25 @@ export interface MacroEvent {
   embargo_end: number;   // unix s — event + 5 min
 }
 
+/** GET /api/burner/predictions — Triple-Fusion output (main.py) */
+export interface NewsPrediction {
+  event_id: string;
+  event_name: string;
+  impact: string;
+  time_str: string;
+  forecast: number;
+  previous: number;
+  predicted_action: "BUY NOW" | "SELL NOW";
+  confidence_pct: number;
+  confluence_grade: string;
+  fundamental_rationale: string;
+  technical_rationale: string;
+  gemini_ai_rationale: string;
+  ai_sentiment_score: number;
+  market_regime: string;
+  volume_delta: number;
+}
+
 /** Master failsafe state, priority KILLED > EMBARGO > ARMED */
 export type FailsafeMode = "ARMED" | "KILLED" | "EMBARGO";
 
