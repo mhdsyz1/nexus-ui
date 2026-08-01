@@ -3,9 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Bot, ImagePlus, SendHorizonal, X, GraduationCap, Loader2 } from "lucide-react";
-import { BACKEND_URL } from "@/lib/quant/constants";
-import { useTerminalStore } from "@/lib/quant/store";
+import { adminFetch, AdminAuthError } from "@/lib/quant/adminFetch";
 import { qtInputClass, qtInputStyle } from "./QtDialog";
+
+/** File -> raw base64 (no data: prefix) for the JSON transport */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+    r.onerror = () => reject(new Error("Could not read image"));
+    r.readAsDataURL(file);
+  });
+}
 
 interface MentorMessage {
   id: string;
@@ -18,9 +27,6 @@ interface MentorMessage {
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp"];
 
 export function AiMentor() {
-  const requestAdminKey = useTerminalStore((s) => s.requestAdminKey);
-  const clearAdminKey = useTerminalStore((s) => s.clearAdminKey);
-
   const [messages, setMessages] = useState<MentorMessage[]>([]);
   const [input, setInput] = useState("");
   const [attached, setAttached] = useState<File | null>(null);
@@ -55,9 +61,6 @@ export function AiMentor() {
     const prompt = input.trim();
     if (!prompt || busy) return;
 
-    const key = await requestAdminKey();
-    if (!key) return;
-
     const userMsg: MentorMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -78,31 +81,20 @@ export function AiMentor() {
     setBusy(true);
 
     try {
-      const form = new FormData();
-      form.append("prompt", prompt);
-      form.append("history", JSON.stringify(historyPayload));
-      if (fileToSend) form.append("image", fileToSend);
-
-      const res = await fetch(`${BACKEND_URL}/api/mentor/chat`, {
-        method: "POST",
-        headers: { "X-Admin-Key": key }, // no Content-Type: browser sets the multipart boundary
-        body: form,
-      });
-      if (res.status === 401 || res.status === 403) {
-        clearAdminKey();
-        throw new Error("Key rejected - it was cleared; retry to re-enter.");
+      const body: Record<string, unknown> = { prompt, history: historyPayload };
+      if (fileToSend) {
+        body.image_b64 = await fileToBase64(fileToSend);
+        body.image_mime = fileToSend.type;
       }
-      if (!res.ok) {
-        const j = await res.json().catch(() => null);
-        throw new Error(j?.detail ?? `Mentor returned ${res.status}`);
-      }
+      // JSON transport (no multipart): adminFetch handles the key prompt,
+      // X-Admin-Key header, and 401/403 vault auto-clear.
+      const res = await adminFetch("/api/mentor/chat", body);
       const j = await res.json();
       setMessages((m) => [...m, { id: crypto.randomUUID(), role: "model", text: String(j.reply ?? "") }]);
     } catch (e) {
-      setMessages((m) => [
-        ...m,
-        { id: crypto.randomUUID(), role: "model", text: (e as Error).message, error: true },
-      ]);
+      const text =
+        e instanceof AdminAuthError ? (e as Error).message : (e as Error).message || "Mentor unreachable";
+      setMessages((m) => [...m, { id: crypto.randomUUID(), role: "model", text, error: true }]);
     } finally {
       setBusy(false);
     }
