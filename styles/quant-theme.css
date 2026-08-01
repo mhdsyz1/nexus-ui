@@ -1,0 +1,85 @@
+/* ============================================================
+   NEXUS QUANT TERMINAL — THEME TOKENS (Phase 1)
+   Import once in app/globals.css:  @import "../styles/quant-theme.css";
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --qt-bg: #0a0b0d;
+  --qt-surface: #111318;
+  --qt-surface-2: #16191f;
+  --qt-surface-3: #1b1f27;
+  --qt-border: #1f242d;
+  --qt-border-strong: #2a313d;
+
+  /* Text */
+  --qt-text: #e6e8ec;
+  --qt-text-muted: #8a93a3;
+  --qt-text-faint: #566072;
+
+  /* Semantic */
+  --qt-accent: #22d3ee;        /* cyan — system identity */
+  --qt-accent-dim: #0e7490;
+  --qt-long: #10b981;          /* emerald — long / armed / win */
+  --qt-short: #f43f5e;         /* rose — short / killed / loss */
+  --qt-warn: #f59e0b;          /* amber — embargo / breakeven */
+  --qt-squeeze: #ff00ff;       /* magenta — mirrors Pine SQUEEZE */
+  --qt-magnet: #ffd700;        /* gold — RESERVED for Magnet Node only */
+
+  /* Type */
+  --qt-font-data: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace,
+    SFMono-Regular, Menlo, monospace;
+  --qt-font-ui: var(--font-inter), Inter, system-ui, -apple-system, sans-serif;
+
+  /* Rhythm */
+  --qt-radius: 10px;
+  --qt-statusbar-h: 44px;
+  --qt-rail-w: 64px;
+  --qt-nav-h: 60px;
+}
+
+/* Data numerals never jitter */
+.qt-num {
+  font-family: var(--qt-font-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.qt-label {
+  font-family: var(--qt-font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--qt-text-muted);
+}
+
+.qt-card {
+  background: var(--qt-surface);
+  border: 1px solid var(--qt-border);
+  border-radius: var(--qt-radius);
+}
+
+/* Breathing ring for the ARMED state */
+@keyframes qt-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(16 185 129 / 0.35); }
+  50% { box-shadow: 0 0 0 5px rgb(16 185 129 / 0); }
+}
+.qt-armed-ring { animation: qt-breathe 2.6s ease-in-out infinite; }
+
+/* Magenta pulse for SQUEEZE regime takeover */
+@keyframes qt-squeeze-pulse {
+  0%, 100% { border-color: rgb(255 0 255 / 0.9); box-shadow: 0 0 14px rgb(255 0 255 / 0.25); }
+  50% { border-color: rgb(255 0 255 / 0.35); box-shadow: 0 0 4px rgb(255 0 255 / 0.08); }
+}
+.qt-squeeze-cell { animation: qt-squeeze-pulse 1.6s ease-in-out infinite; }
+
+/* Connection health dot */
+.qt-dot { width: 7px; height: 7px; border-radius: 9999px; }
+.qt-dot--ok { background: var(--qt-long); box-shadow: 0 0 6px rgb(16 185 129 / 0.7); }
+.qt-dot--degraded { background: var(--qt-warn); }
+.qt-dot--down { background: var(--qt-short); }
+
+@media (prefers-reduced-motion: reduce) {
+  .qt-armed-ring, .qt-squeeze-cell { animation: none; }
+}

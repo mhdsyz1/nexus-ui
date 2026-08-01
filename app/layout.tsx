@@ -1,9 +1,19 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
+import { Inter, Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
+import { QuantProviders } from "@/lib/quant/providers";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
-const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
+// 1. Font Definitions
+const inter = Inter({ 
+  subsets: ["latin"], 
+  variable: "--font-inter" 
+});
+
+const jetbrains = JetBrains_Mono({ 
+  subsets: ["latin"], 
+  variable: "--font-jetbrains-mono" 
+});
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,13 +25,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// 1. UPDATED METADATA FOR YOUR PROJECT
+// 2. Metadata & Viewport Configurations
 export const metadata: Metadata = {
-  title: "Neural Nexus",
-  description: "Institutional Trading Terminal",
+  title: "Neural Nexus | Quant Terminal",
+  description: "Institutional Automated Trading Terminal",
 };
 
-// 2. NEW VIEWPORT EXPORT (Locks mobile scaling)
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -38,16 +47,19 @@ export default function RootLayout({
     <html
       lang="en"
       className={cn(
-        "h-full", 
-        "antialiased", 
+        "h-full antialiased dark", 
+        inter.variable,
+        jetbrains.variable,
         geistSans.variable, 
-        geistMono.variable, 
-        "font-mono", 
-        jetbrainsMono.variable,
-        "dark" // Added 'dark' to ensure your dark theme stays consistent across the layout
+        geistMono.variable
       )}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-[var(--qt-bg)] text-[var(--qt-text)]">
+        {/* QuantProviders wraps the entire app to supply TanStack Query */}
+        <QuantProviders>
+          {children}
+        </QuantProviders>
+      </body>
     </html>
   );
 }
