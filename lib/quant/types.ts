@@ -53,6 +53,7 @@ export interface QueueItem {
   structure?: string;
   realized_pnl?: number;
   trade_layers?: TradeLayer[];
+  take_profit_1?: number;
 }
 
 /**

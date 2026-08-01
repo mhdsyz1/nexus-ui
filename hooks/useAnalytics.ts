@@ -163,7 +163,7 @@ export function useAnalytics() {
         .from("execution_queue")
         .select(
           `id, ticker, timeframe, action, status, created_at, entry_price,
-           zone_low, zone_high, stop_loss, take_profit, realized_pnl, confidence, score,
+           zone_low, zone_high, stop_loss, take_profit, take_profit_1, realized_pnl, confidence, score,
            trade_layers ( id, trade_id, layer_type, risk_pct, target_price, stop_loss, status, realized_pnl )`,
         )
         .in("status", RESOLVED as unknown as string[])

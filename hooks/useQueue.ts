@@ -8,7 +8,7 @@ import type { QueueItem } from "@/lib/quant/types";
 
 const SELECT = `
   id, ticker, action, status, created_at, score, confidence,
-  entry_price, zone_low, zone_high, stop_loss, take_profit, atr_volatility,
+  entry_price, zone_low, zone_high, stop_loss, take_profit, take_profit_1, atr_volatility,
   market_regime, volume_delta, magnet_node, structure, realized_pnl,
   trade_layers ( id, trade_id, layer_type, risk_pct, target_price, stop_loss, status, realized_pnl )
 `;
