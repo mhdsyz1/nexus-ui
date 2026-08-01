@@ -37,6 +37,7 @@ export interface QueueItem {
   ticker: string;
   action: string;
   status: string;
+  timeframe?: string;
   created_at: string;
   score?: number;
   confidence?: string;
@@ -77,6 +78,14 @@ export interface MacroEvent {
   previous: number;
   embargo_start: number; // unix s — event − 15 min
   embargo_end: number;   // unix s — event + 5 min
+}
+
+/** Supabase: trade_journal */
+export interface JournalEntry {
+  id: string;
+  trade_id: string;
+  reason_for_entry: string;
+  created_at: string;
 }
 
 /** GET /api/burner/predictions — Triple-Fusion output (main.py) */

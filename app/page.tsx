@@ -8,29 +8,18 @@ import { SignalQueue } from "@/components/terminal/SignalQueue";
 import { FailsafePanel } from "@/components/terminal/FailsafePanel";
 import { TripleFusionConsole } from "@/components/terminal/TripleFusionConsole";
 import { PositionSizer } from "@/components/terminal/PositionSizer";
+import { PerformanceGrid } from "@/components/terminal/PerformanceGrid";
+import { EquityCurveChart } from "@/components/terminal/EquityCurveChart";
+import { JournalStream } from "@/components/terminal/JournalStream";
 import { AdminKeyDialog } from "@/components/terminal/AdminKeyDialog";
 import { useTerminalStore } from "@/lib/quant/store";
 import { useQueue } from "@/hooks/useQueue";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 /**
- * PHASE 3 BUILD — TripleFusionConsole (BURNER) + PositionSizer (SIZER).
- * Remaining: Analytics view (equity curve / journal stream) and the
- * Phase 6 AuthVault polish + Sonner sweep.
+ * PHASE 4 BUILD — Analytics & Performance Engine (ANALYTICS view).
+ * Remaining: the Phase 6 AuthVault polish + Sonner sweep.
  */
-
-function ReservedSlot({ title, phase }: { title: string; phase: number }) {
-  return (
-    <div
-      className="qt-card flex flex-col items-center justify-center gap-1 py-10"
-      style={{ borderStyle: "dashed", borderColor: "var(--qt-border-strong)" }}
-    >
-      <span className="qt-label">{title}</span>
-      <span className="qt-num text-[10px]" style={{ color: "var(--qt-text-faint)" }}>
-        Arrives in Phase {phase}
-      </span>
-    </div>
-  );
-}
 
 function TerminalView() {
   const { activeTrade, pending, resolved } = useQueue();
@@ -45,6 +34,17 @@ function TerminalView() {
   );
 }
 
+function AnalyticsView() {
+  const { trades, journalByTrade, metrics, curve, hasData } = useAnalytics();
+  return (
+    <div className="flex flex-col gap-3 max-w-[1400px] mx-auto">
+      <PerformanceGrid metrics={metrics} hasData={hasData} />
+      <EquityCurveChart curve={curve} peakEquity={metrics.peakEquity} />
+      <JournalStream trades={trades} journalByTrade={journalByTrade} />
+    </div>
+  );
+}
+
 function MainViewport() {
   const activeView = useTerminalStore((s) => s.activeView);
 
@@ -54,7 +54,7 @@ function MainViewport() {
     case "BURNER":
       return <TripleFusionConsole />;
     case "ANALYTICS":
-      return <ReservedSlot title="Equity Curve · Performance · Journal" phase={5} />;
+      return <AnalyticsView />;
     case "SIZER":
       return <PositionSizer />;
     case "CONTROLS":
