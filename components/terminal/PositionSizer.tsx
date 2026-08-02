@@ -129,13 +129,15 @@ export function PositionSizer() {
             <Row label="SL distance" value={`$${calc.dist.toFixed(2)} · ${Math.round(calc.pips)} pips`} />
             <Row label={`Projected reward (${calc.r.toFixed(1)}R${calc.tpImplied ? " engine" : ""})`} value={`$${calc.rewardUsd.toFixed(2)}`} accent="var(--qt-long)" />
             <div className="flex items-center justify-between pt-3">
-              <span className="qt-label" style={{ color: "var(--qt-text)" }}>Execute size</span>
+              <span className="qt-label" style={{ color: "var(--qt-text-muted)" }}>
+                What-if at {riskPctNum}% &mdash; not the engine
+              </span>
               <motion.span
                 key={calc.lots.toFixed(2)}
                 initial={{ opacity: 0.4, y: -2 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="qt-num text-2xl font-bold"
-                style={{ color: "var(--qt-long)" }}
+                className="qt-num text-base font-bold"
+                style={{ color: "var(--qt-text-muted)" }}
               >
                 {calc.lots.toFixed(2)} lots
               </motion.span>
@@ -176,13 +178,14 @@ export function PositionSizer() {
             const pctOfEquity = equityNum > 0 ? (perLayer / equityNum) * 100 : 0;
             return (
               <div className="rounded-xl p-3" style={{ background: "var(--qt-surface-2)" }}>
-                <span className="qt-label">
-                  Engine size · MM ladder{LADDER_TIER_OFFSET > 0 ? ` (one rung below $${equityNum.toFixed(0)})` : ""}
+                <span className="qt-label" style={{ color: "var(--qt-accent)" }}>
+                  ▸ Engine size · what will actually be traded
+                  {LADDER_TIER_OFFSET > 0 ? ` — MM ladder, one rung below $${equityNum.toFixed(0)}` : " — MM ladder"}
                 </span>
                 <div className="grid grid-cols-3 gap-2 mt-2">
-                  <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
+                  <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-accent)" }}>
                     <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>lots / layer</p>
-                    <p className="qt-num text-[13px] font-bold" style={{ color: "var(--qt-accent)" }}>{lots.toFixed(2)}</p>
+                    <p className="qt-num text-2xl font-bold" style={{ color: "var(--qt-accent)" }}>{lots.toFixed(2)}</p>
                   </div>
                   <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
                     <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>risk / layer</p>
@@ -195,6 +198,12 @@ export function PositionSizer() {
                     <p className="qt-num text-[8px]" style={{ color: "var(--qt-text-faint)" }}>${(perLayer * layers).toFixed(2)} if fully layered</p>
                   </div>
                 </div>
+                {calc && calc.lots > lots * 1.5 && (
+                  <p className="qt-num text-[9px] mt-2" style={{ color: "var(--qt-warn)" }}>
+                    Your {riskPctNum}% what-if sizes {(calc.lots / lots).toFixed(1)}× the engine.
+                    Trading {calc.lots.toFixed(2)} instead of {lots.toFixed(2)} breaks the MM ladder.
+                  </p>
+                )}
               </div>
             );
           })()}

@@ -140,10 +140,10 @@ function DeltaPressureGauge({
           className="qt-num text-lg font-bold"
           style={{ color: positive ? "var(--qt-long)" : "var(--qt-short)" }}
         >
-          {feedDown ? "n/a" : `${positive ? "+" : ""}${z!.toFixed(2)}\u03c3`}
+          {feedDown ? "n/a" : `${positive ? "+" : ""}${z!.toFixed(2)}σ`}
         </span>
         <span className="qt-num text-[9px]" style={{ color: "var(--qt-text-faint)" }}>
-          raw \u0394 {Math.round(delta).toLocaleString()} · gate ±{rejectAt}\u03c3
+          raw Δ {Math.round(delta).toLocaleString()} · gate ±{rejectAt}σ
         </span>
       </div>
 
@@ -156,7 +156,7 @@ function DeltaPressureGauge({
             key={v}
             className="absolute inset-y-0 w-px"
             style={{ left: `${tick(v)}%`, background: "rgb(244 63 94 / 0.55)" }}
-            title={`±${rejectAt}\u03c3: Filter 1 rejects opposing entries`}
+            title={`±${rejectAt}σ: Filter 1 rejects opposing entries`}
           />
         ))}
         <motion.span
@@ -176,9 +176,9 @@ function DeltaPressureGauge({
         {feedDown
           ? "Filter 1 FAIL-CLOSED — no delta_z from the Pine feed, all entries rejected"
           : rejectsShorts
-            ? `Filter 1: SHORT entries rejected while \u0394z > +${rejectAt}\u03c3`
+            ? `Filter 1: SHORT entries rejected while Δz > +${rejectAt}σ`
             : rejectsLongs
-              ? `Filter 1: LONG entries rejected while \u0394z < \u2212${rejectAt}\u03c3`
+              ? `Filter 1: LONG entries rejected while Δz < −${rejectAt}σ`
               : "Filter 1 clear — flow permits both directions"}
       </span>
 
