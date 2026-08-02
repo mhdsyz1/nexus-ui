@@ -5,12 +5,18 @@ import { motion } from "framer-motion";
 import { Calculator, Zap } from "lucide-react";
 import { useRiskConfig } from "@/hooks/useSupabaseReads";
 import { useSignalContext } from "@/hooks/useSupabaseReads";
-import { ENGINE_RR, PIP_VALUE_PER_LOT, RISK_TIERS, USD_PER_PIP } from "@/lib/quant/constants";
+import { ENGINE_RR, CONTRACT_OZ, USD_PER_PIP, computePositionSize, LADDER_TIER_OFFSET } from "@/lib/quant/constants";
 import { qtInputClass, qtInputStyle } from "./QtDialog";
 
-/* Engine sizing formula (telegram_bot.py): lots = equity·pct / (dist · $100/lot) */
+/* MANUAL WHAT-IF ONLY — "if I risked X%, what size is that?"
+   This is the operator's own scenario and is NOT what the engine does.
+   trading_state.compute_position_size walks the written MM ladder on equity
+   alone, one rung BELOW the balance's own tier, ignoring risk percentage
+   entirely. The engine's real size is rendered separately below; the old
+   percentage matrix claimed to BE the engine and returned 0.02–0.05 lots
+   where the engine sizes 0.01 — a 5x overtrade if followed. */
 const lotsFor = (equity: number, pct: number, dist: number) =>
-  dist > 0 ? (equity * pct) / (dist * PIP_VALUE_PER_LOT) : 0;
+  dist > 0 ? (equity * pct) / (dist * CONTRACT_OZ) : 0;
 
 function Row({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
@@ -163,21 +169,35 @@ export function PositionSizer() {
             </div>
           </div>
 
-          {/* Engine tier breakdown on live distance */}
-          <div className="rounded-xl p-3" style={{ background: "var(--qt-surface-2)" }}>
-            <span className="qt-label">Engine tier breakdown (T1/T2/T3 on this SL)</span>
-            <div className="grid grid-cols-3 gap-2 mt-2">
-              {RISK_TIERS.map(({ tier, pct }) => (
-                <div key={tier} className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
-                  <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>{tier} · {pct * 100}%</p>
-                  <p className="qt-num text-[13px] font-bold" style={{ color: "var(--qt-accent)" }}>
-                    {lotsFor(equityNum, pct, calc.dist).toFixed(2)}
-                  </p>
-                  <p className="qt-num text-[8px]" style={{ color: "var(--qt-text-faint)" }}>${(equityNum * pct).toFixed(2)} risk</p>
+          {/* Engine size — the MM ladder, which is what the engine actually writes */}
+          {(() => {
+            const { lots, layers } = computePositionSize(equityNum);
+            const perLayer = calc.dist > 0 ? calc.dist * CONTRACT_OZ * lots : 0;
+            const pctOfEquity = equityNum > 0 ? (perLayer / equityNum) * 100 : 0;
+            return (
+              <div className="rounded-xl p-3" style={{ background: "var(--qt-surface-2)" }}>
+                <span className="qt-label">
+                  Engine size · MM ladder{LADDER_TIER_OFFSET > 0 ? ` (one rung below $${equityNum.toFixed(0)})` : ""}
+                </span>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
+                    <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>lots / layer</p>
+                    <p className="qt-num text-[13px] font-bold" style={{ color: "var(--qt-accent)" }}>{lots.toFixed(2)}</p>
+                  </div>
+                  <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
+                    <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>risk / layer</p>
+                    <p className="qt-num text-[13px] font-bold" style={{ color: "var(--qt-short)" }}>${perLayer.toFixed(2)}</p>
+                    <p className="qt-num text-[8px]" style={{ color: "var(--qt-text-faint)" }}>{pctOfEquity.toFixed(1)}% of equity</p>
+                  </div>
+                  <div className="rounded-lg p-2 text-center" style={{ border: "1px solid var(--qt-border-strong)" }}>
+                    <p className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>max layers</p>
+                    <p className="qt-num text-[13px] font-bold" style={{ color: "var(--qt-text)" }}>{layers}</p>
+                    <p className="qt-num text-[8px]" style={{ color: "var(--qt-text-faint)" }}>${(perLayer * layers).toFixed(2)} if fully layered</p>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
+            );
+          })()}
         </div>
       ) : (
         <div className="text-center py-5 rounded-xl" style={{ border: "1px dashed var(--qt-border-strong)" }}>

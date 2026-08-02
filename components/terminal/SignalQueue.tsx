@@ -5,16 +5,18 @@ import { Check, X as XIcon, Inbox } from "lucide-react";
 import { useRiskConfig } from "@/hooks/useSupabaseReads";
 import { useAcceptTrade, useDropTrade } from "@/hooks/useMutations";
 import { AdminAuthError } from "@/lib/quant/adminFetch";
-import { PIP_VALUE_PER_LOT, RISK_TIERS } from "@/lib/quant/constants";
+import { computePositionSize, riskPerLayer } from "@/lib/quant/constants";
 import type { QueueItem } from "@/lib/quant/types";
 
-/* Mirrors telegram_bot.py sizing: lots = equity·pct / (|midzone − SL| · $100) */
-function tierLots(equity: number, pct: number, item: QueueItem): number {
-  const { zone_low, zone_high, stop_loss } = item;
-  if (!zone_low || !zone_high || !stop_loss) return 0;
-  const mid = (zone_low + zone_high) / 2;
-  const dist = Math.abs(mid - stop_loss);
-  return dist > 0 ? (equity * pct) / (dist * PIP_VALUE_PER_LOT) : 0;
+/* The engine writes `lots` on the row (trading_state.compute_position_size).
+   Show THAT, never a parallel calculation — the old tiered matrix computed
+   0.02–0.05 while the engine sized 0.01, a 5x overtrade if followed. */
+function rowLots(item: QueueItem, equity: number): { lots: number; layers: number; fromRow: boolean } {
+  const written = Number(item.lots ?? 0);
+  if (written > 0) {
+    return { lots: written, layers: computePositionSize(equity).layers, fromRow: true };
+  }
+  return { ...computePositionSize(equity), fromRow: false };
 }
 
 function rrRatio(item: QueueItem): number | null {
@@ -107,14 +109,29 @@ function PendingRow({
         )}
       </div>
 
-      {/* Tiered lots — engine risk tiers on live equity */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {RISK_TIERS.map(({ tier, pct }) => (
-          <span key={tier} className="qt-num text-[9px] px-1.5 py-0.5 rounded" style={{ background: "var(--qt-surface-3)", color: "var(--qt-text-muted)" }}>
-            {tier} ({pct * 100}%) <span style={{ color: "var(--qt-accent)" }}>{tierLots(equity, pct, item).toFixed(2)} lots</span>
-          </span>
-        ))}
-      </div>
+      {/* Engine size — the value written to the ledger, not a re-derivation */}
+      {(() => {
+        const { lots, layers, fromRow } = rowLots(item, equity);
+        const risk = item.entry_price && item.stop_loss ? riskPerLayer(item.entry_price, item.stop_loss, lots) : 0;
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="qt-num text-[9px] px-1.5 py-0.5 rounded" style={{ background: "var(--qt-surface-3)", color: "var(--qt-text-muted)" }}>
+              <span style={{ color: "var(--qt-accent)" }}>{lots.toFixed(2)} lots</span> / layer
+              {layers > 1 && <> · max {layers}</>}
+            </span>
+            {risk > 0 && (
+              <span className="qt-num text-[9px] px-1.5 py-0.5 rounded" style={{ background: "var(--qt-surface-3)", color: "var(--qt-text-muted)" }}>
+                risk <span style={{ color: "var(--qt-accent)" }}>${risk.toFixed(2)}</span> / layer
+              </span>
+            )}
+            {!fromRow && (
+              <span className="qt-num text-[9px]" style={{ color: "var(--qt-text-muted)" }}>
+                (ladder estimate — engine has not written lots yet)
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {error && (
         <p className="qt-num text-[9.5px]" style={{ color: "var(--qt-short)" }}>

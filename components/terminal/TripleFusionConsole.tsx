@@ -14,7 +14,7 @@ import { useQueue } from "@/hooks/useQueue";
 import { usePredictions } from "@/hooks/usePredictions";
 import { adminFetch, AdminAuthError } from "@/lib/quant/adminFetch";
 import { buildManualPayload, evaluatePreflight, type Direction, type PreflightCheck } from "@/lib/quant/preflight";
-import { ENGINE_RR, PIP_VALUE_PER_LOT, RISK_TIERS } from "@/lib/quant/constants";
+import { ENGINE_RR, CONTRACT_OZ, computePositionSize } from "@/lib/quant/constants";
 import type { NewsPrediction } from "@/lib/quant/types";
 import { qtInputClass, qtInputStyle } from "./QtDialog";
 
@@ -156,7 +156,6 @@ export function TripleFusionConsole() {
   const [direction, setDirection] = useState<Direction>("LONG");
   const [entry, setEntry] = useState("");
   const [sl, setSl] = useState("");
-  const [tier, setTier] = useState<(typeof RISK_TIERS)[number]["tier"]>("T1");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -169,6 +168,8 @@ export function TripleFusionConsole() {
       valid
         ? evaluatePreflight(direction, entryNum, slNum, {
             volumeDelta: telemetry.volume_delta,
+            deltaZ: telemetry.delta_z,
+            regime: telemetry.market_regime,
             magnetNode: telemetry.magnet_node,
             atr: ctx.atr,
             sessionActive: session.isActiveSession,
@@ -180,11 +181,11 @@ export function TripleFusionConsole() {
     [valid, direction, entryNum, slNum, telemetry, ctx.atr, session.isActiveSession, activeTrade, fs],
   );
 
-  const tierPct = RISK_TIERS.find((t) => t.tier === tier)!.pct;
-  const tierLots =
-    preflight && preflight.riskDistance > 0
-      ? (config.total_equity * tierPct) / (preflight.riskDistance * PIP_VALUE_PER_LOT)
-      : 0;
+  // The engine sizes from the MM ladder on equity alone - not a risk percentage.
+  const { lots: ladderLots, layers: ladderLayers } = computePositionSize(config.total_equity);
+  const tierLots = ladderLots;
+  const tierRiskUsd =
+    preflight && preflight.riskDistance > 0 ? preflight.riskDistance * CONTRACT_OZ * ladderLots : 0;
 
   const adoptPrediction = (p: NewsPrediction) => {
     setDirection(p.predicted_action === "BUY NOW" ? "LONG" : "SHORT");
@@ -274,30 +275,23 @@ export function TripleFusionConsole() {
           </div>
         )}
 
-        {/* Tier allocation preview (broadcast-side sizing) */}
+        {/* Engine size — the MM ladder. Not selectable: the engine decides. */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="qt-label">Risk tier</span>
-          {RISK_TIERS.map(({ tier: t, pct }) => (
-            <button
-              key={t}
-              onClick={() => setTier(t)}
-              className="qt-num px-2 py-1 rounded text-[9px] font-bold outline-none focus-visible:ring-2 focus-visible:ring-[var(--qt-accent)]"
-              style={{
-                border: `1px solid ${tier === t ? "var(--qt-accent)" : "var(--qt-border-strong)"}`,
-                color: tier === t ? "var(--qt-accent)" : "var(--qt-text-muted)",
-              }}
-            >
-              {t} · {pct * 100}%
-            </button>
-          ))}
-          {preflight && tierLots > 0 && (
-            <span className="qt-num text-[9.5px]" style={{ color: "var(--qt-accent)" }}>
-              → {tierLots.toFixed(2)} lots (${(config.total_equity * tierPct).toFixed(2)} at risk)
+          <span className="qt-label">Engine size</span>
+          <span className="qt-num text-[9.5px] px-2 py-1 rounded" style={{ border: "1px solid var(--qt-border-strong)", color: "var(--qt-accent)" }}>
+            {tierLots.toFixed(2)} lots / layer
+          </span>
+          <span className="qt-num text-[9.5px] px-2 py-1 rounded" style={{ border: "1px solid var(--qt-border-strong)", color: "var(--qt-text-muted)" }}>
+            max {ladderLayers} layers
+          </span>
+          {preflight && tierRiskUsd > 0 && (
+            <span className="qt-num text-[9.5px]" style={{ color: "var(--qt-short)" }}>
+              ${tierRiskUsd.toFixed(2)} risk / layer
             </span>
           )}
         </div>
         <p className="qt-num text-[8.5px]" style={{ color: "var(--qt-text-faint)" }}>
-          Sizing is broadcast-side (the Telegram tier matrix) — the tier here previews your allocation; it is not sent with the signal.
+          Size comes from trading_state.compute_position_size on live equity — the written MM ladder, one rung below your balance&apos;s own tier. It is not selectable here because the engine, not the terminal, decides it.
         </p>
       </section>
 

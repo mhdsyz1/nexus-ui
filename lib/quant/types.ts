@@ -9,6 +9,11 @@ export interface Telemetry {
   structure: string;
   volume_delta: number;
   magnet_node: number;
+  /** Sigmas of CME footprint delta. null = feed did not supply it. */
+  delta_z?: number | null;
+  atr_volatility?: number;
+  /** Server-reported gate so the UI never hardcodes it. */
+  delta_z_gate?: number;
 }
 
 /** Supabase: risk_configuration (latest row) */
@@ -54,6 +59,15 @@ export interface QueueItem {
   structure?: string;
   realized_pnl?: number;
   trade_layers?: TradeLayer[];
+  /** Written by trading_state.compute_position_size — the ONLY size of record. */
+  lots?: number;
+  /** Filter 1's decision input, in sigmas. Persisted from 2026-08-03. */
+  delta_z?: number | null;
+  /** Immutable stop at signal time; stop_loss moves to BE on TP1. */
+  initial_stop_loss?: number;
+  /** Generated column: realized_pnl / (|entry − initial_stop_loss| · 100 · lots). */
+  r_multiple?: number | null;
+  tp1_hit?: boolean;
 }
 
 /**

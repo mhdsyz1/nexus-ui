@@ -1,13 +1,15 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { MAGNET_TRAP_ATR_MULT } from "@/lib/quant/constants";
+import { MAGNET_BAND_BY_REGIME, MAGNET_BAND_DEFAULT, MAGNET_HARD_BLOCK, magnetPressure } from "@/lib/quant/constants";
 
 interface MagnetRadarProps {
   magnetNode: number;
   refPrice: number | null;
   atr: number | null;
   asOf: string | null;
+  /** Filter 2's band is regime-conditional; default matches main.py's fallback. */
+  regime?: string;
 }
 
 const W = 220;
@@ -18,11 +20,12 @@ const LADDER_X = 58;
 /**
  * The signature instrument. A vertical price ladder rendering the
  * engine's Filter-2 geometry: the gold magnet line, the rose
- * floor-trap band (0.5 × ATR above the magnet, where main.py
- * rejects SELL entries), and the last price the engine saw.
+ * floor-trap band (regime-conditional, 0.35–0.75 × ATR above the
+ * magnet, where main.py rejects SELL entries at pressure >= 0.66),
+ * and the last price the engine saw.
  * Pure visualization — the rejection logic itself stays in main.py.
  */
-export function MagnetRadar({ magnetNode, refPrice, atr, asOf }: MagnetRadarProps) {
+export function MagnetRadar({ magnetNode, refPrice, atr, asOf, regime = "Unknown" }: MagnetRadarProps) {
   const reduced = useReducedMotion();
   const hasMagnet = magnetNode > 0;
   const hasContext = refPrice != null && atr != null && atr > 0;
@@ -48,15 +51,19 @@ export function MagnetRadar({ magnetNode, refPrice, atr, asOf }: MagnetRadarProp
   };
 
   const magnetY = toY(magnetNode);
+  // Filter 2 uses a REGIME-CONDITIONAL band, not a flat 0.5xATR. Chop widens
+  // the danger zone to 0.75xATR; trends punch through, so it narrows to 0.35.
+  const bandMult = MAGNET_BAND_BY_REGIME[regime] ?? MAGNET_BAND_DEFAULT;
   const trapTopPrice = hasContext
-    ? magnetNode + atr! * MAGNET_TRAP_ATR_MULT
+    ? magnetNode + atr! * bandMult
     : null;
   const trapTopY = trapTopPrice != null ? toY(trapTopPrice) : null;
 
   const priceY = hasContext ? toY(refPrice!) : null;
   const distATR = hasContext ? (refPrice! - magnetNode) / atr! : null;
-  const inTrap =
-    distATR != null && distATR > 0 && distATR <= MAGNET_TRAP_ATR_MULT;
+  // Server rejects on PRESSURE >= 0.66, not on raw distance.
+  const pressure = hasContext ? magnetPressure(refPrice!, magnetNode, atr!, regime) : 0;
+  const inTrap = pressure >= MAGNET_HARD_BLOCK;
 
   const asOfLabel = asOf
     ? new Date(asOf).toISOString().slice(11, 16) + " UTC"
@@ -95,7 +102,7 @@ export function MagnetRadar({ magnetNode, refPrice, atr, asOf }: MagnetRadarProp
               strokeDasharray="3 3"
             />
             <text x={W - 12} y={trapTopY - 4} textAnchor="end" className="qt-num" fontSize="7.5" fill="var(--qt-short)">
-              SELL TRAP ZONE · +{MAGNET_TRAP_ATR_MULT} ATR
+              SELL TRAP ZONE · +{bandMult} ATR ({regime})
             </text>
           </>
         )}

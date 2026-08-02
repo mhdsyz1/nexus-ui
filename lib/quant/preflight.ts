@@ -7,17 +7,23 @@
 // ============================================================
 
 import {
-  DELTA_REJECT_THRESHOLD,
+  DELTA_Z_REJECT,
   ENGINE_RR,
-  MAGNET_TRAP_ATR_MULT,
-  MAX_RISK_USD,
-  SL_BUFFER_USD,
+  MAGNET_HARD_BLOCK,
+  MAGNET_TIER_CAP_PRESSURE,
+  magnetPressure,
+  computeStopBuffer,
+  maxRiskDistance,
 } from "./constants";
 
 export type Direction = "LONG" | "SHORT";
 
 export interface PreflightContext {
   volumeDelta: number;
+  /** Filter 1's real input, in sigmas. undefined/null = feed down -> fail closed. */
+  deltaZ?: number | null;
+  /** Filter 2's band is regime-conditional. */
+  regime?: string;
   magnetNode: number;
   atr: number | null;
   sessionActive: boolean;
@@ -59,33 +65,46 @@ export function evaluatePreflight(
 
   // --- Geometry (Filter 3): zone construction targets the user's SL,
   // so engineSL === user SL when valid; distances mirror main.py.
+  // main.py compute_stop_buffer(): dynamic on ATR and session spread, not a
+  // flat $2.50. maxRiskDistance(): vol-scaled between $10 and $15.
+  const atrVal = ctx.atr ?? 0;
+  const minBuffer = computeStopBuffer(atrVal);
+  const maxRisk = maxRiskDistance(atrVal);
   const riskDistance = isLong ? entry - sl : sl - entry;
-  const minOk = riskDistance >= SL_BUFFER_USD;
-  const maxOk = riskDistance <= MAX_RISK_USD;
+  const minOk = riskDistance >= minBuffer;
+  const maxOk = riskDistance <= maxRisk;
   checks.push({
     id: "geometry",
     label: "Risk Geometry",
     enforced: true,
     status: minOk && maxOk ? "PASS" : "BLOCK",
     detail: !minOk
-      ? `SL must sit ≥ $${SL_BUFFER_USD.toFixed(2)} (25 pips) ${isLong ? "below" : "above"} entry — zone construction needs the buffer`
+      ? `SL must sit ≥ $${minBuffer.toFixed(2)} ${isLong ? "below" : "above"} entry — dynamic buffer on ATR $${atrVal.toFixed(2)} and session spread`
       : !maxOk
-        ? `Risk distance $${riskDistance.toFixed(2)} exceeds the $${MAX_RISK_USD.toFixed(2)} (100-pip) engine cap`
+        ? `Risk distance $${riskDistance.toFixed(2)} exceeds the vol-scaled cap $${maxRisk.toFixed(2)}`
         : `$${riskDistance.toFixed(2)} risk (${Math.round(riskDistance * 10)} pips) within engine bounds`,
   });
 
   // --- Filter 1: directional volume delta
-  const deltaBlocks = isLong
-    ? ctx.volumeDelta < -DELTA_REJECT_THRESHOLD
-    : ctx.volumeDelta > DELTA_REJECT_THRESHOLD;
+  // Filter 1 gates on SIGMAS. An absent delta_z fails CLOSED server-side, so
+  // the mirror must show a BLOCK rather than a pass when the feed is down.
+  const z = ctx.deltaZ ?? null;
+  const feedDown = z == null;
+  const deltaBlocks = feedDown
+    ? true
+    : isLong
+      ? z! < -DELTA_Z_REJECT
+      : z! > DELTA_Z_REJECT;
   checks.push({
     id: "delta",
-    label: "Filter 1 · Volume Delta",
+    label: "Filter 1 · CME delta_z",
     enforced: true,
     status: deltaBlocks ? "BLOCK" : "PASS",
-    detail: deltaBlocks
-      ? `Live Δ ${Math.round(ctx.volumeDelta).toLocaleString()} opposes a ${direction} beyond ±${DELTA_REJECT_THRESHOLD}`
-      : `Live Δ ${Math.round(ctx.volumeDelta).toLocaleString()} permits ${direction} entries`,
+    detail: feedDown
+      ? "No delta_z from the Pine feed — the engine fails CLOSED and rejects every entry"
+      : deltaBlocks
+        ? `Δz ${z!.toFixed(2)}σ opposes a ${direction} beyond ±${DELTA_Z_REJECT}σ`
+        : `Δz ${z!.toFixed(2)}σ permits ${direction} entries (gate ±${DELTA_Z_REJECT}σ)`,
   });
 
   // --- Filter 2: magnet floor trap (shorts only)
@@ -100,15 +119,20 @@ export function evaluatePreflight(
       });
     } else {
       const gap = entry - ctx.magnetNode;
-      const trapped = gap <= ctx.atr * MAGNET_TRAP_ATR_MULT;
+      const regime = ctx.regime ?? "Unknown";
+      const pressure = magnetPressure(entry, ctx.magnetNode, ctx.atr, regime);
+      const trapped = pressure >= MAGNET_HARD_BLOCK;
+      const capped = !trapped && pressure >= MAGNET_TIER_CAP_PRESSURE;
       checks.push({
         id: "magnet",
-        label: "Filter 2 · Magnet Trap",
+        label: "Filter 2 · Magnet Pressure",
         enforced: true,
-        status: trapped ? "BLOCK" : "PASS",
+        status: trapped ? "BLOCK" : capped ? "WARN" : "PASS",
         detail: trapped
-          ? `Entry sits $${gap.toFixed(2)} above magnet ${ctx.magnetNode.toFixed(2)} — inside the ${MAGNET_TRAP_ATR_MULT}·ATR trap band`
-          : `Entry clears the magnet trap band by $${(gap - ctx.atr * MAGNET_TRAP_ATR_MULT).toFixed(2)}`,
+          ? `Pressure ${pressure.toFixed(2)} — entry $${gap.toFixed(2)} above magnet ${ctx.magnetNode.toFixed(2)}, inside the ${regime} danger band`
+          : capped
+            ? `Pressure ${pressure.toFixed(2)} — passes, but the engine caps size at T1 above ${MAGNET_TIER_CAP_PRESSURE}`
+            : `Pressure ${pressure.toFixed(2)} — clear of the ${regime} magnet band`,
       });
     }
   } else {
@@ -199,6 +223,7 @@ export function buildManualPayload(
     magnet_node: number;
     market_regime: string;
     structure: string;
+    delta_z?: number | null;
   },
   atr: number | null,
 ) {
@@ -208,8 +233,11 @@ export function buildManualPayload(
     timeframe: "MANUAL",
     action: isLong ? "BUY NOW" : "SELL NOW",
     entry_price: entry,
-    zone_high: isLong ? entry : sl - SL_BUFFER_USD,
-    zone_low: isLong ? sl + SL_BUFFER_USD : entry,
+    // The engine re-derives SL from the zone edge minus its own dynamic
+    // buffer, so the zone must be built with the SAME buffer or the server
+    // will not reproduce the stop the operator asked for.
+    zone_high: isLong ? entry : sl - computeStopBuffer(atr ?? 0),
+    zone_low: isLong ? sl + computeStopBuffer(atr ?? 0) : entry,
     stop_loss: sl,
     take_profit: 0, // engine computes 3R in the rewrite
     atr_volatility: atr ?? 0,
@@ -217,6 +245,8 @@ export function buildManualPayload(
     structure: telemetry.structure,
     volume_delta: telemetry.volume_delta,
     magnet_node: telemetry.magnet_node,
+    // Omitting this makes the server fail CLOSED and reject the manual fire.
+    delta_z: telemetry.delta_z ?? null,
     timestamp: Date.now(),
     score: 100,
     confidence: "MANUAL",

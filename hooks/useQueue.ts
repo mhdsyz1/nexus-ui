@@ -10,6 +10,7 @@ const SELECT = `
   id, ticker, action, status, created_at, score, confidence,
   entry_price, zone_low, zone_high, stop_loss, take_profit, take_profit_1, atr_volatility,
   market_regime, volume_delta, magnet_node, structure, realized_pnl,
+  lots, delta_z, initial_stop_loss, r_multiple, tp1_hit,
   trade_layers ( id, trade_id, layer_type, risk_pct, target_price, stop_loss, status, realized_pnl )
 `;
 

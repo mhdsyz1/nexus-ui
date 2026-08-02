@@ -6,9 +6,8 @@ import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useSignalContext } from "@/hooks/useSupabaseReads";
 import {
-  DELTA_GAUGE_SCALE,
-  DELTA_REJECT_THRESHOLD,
-  DELTA_SIGNAL_GATE,
+  DELTA_Z_REJECT,
+  DELTA_Z_GAUGE_SCALE,
 } from "@/lib/quant/constants";
 import { MagnetRadar } from "./MagnetRadar";
 
@@ -108,21 +107,31 @@ function RegimeSpectrum({ regime }: { regime: string }) {
 /* ---------- 2. Delta Pressure Gauge ---------- */
 function DeltaPressureGauge({
   delta,
+  deltaZ,
+  gate,
   history,
 }: {
   delta: number;
+  /** Sigmas. Filter 1's actual decision input; null = feed did not supply it. */
+  deltaZ?: number | null;
+  gate?: number;
   history: { t: number; delta: number }[];
 }) {
   const reduced = useReducedMotion();
-  const clamped = Math.max(-DELTA_GAUGE_SCALE, Math.min(DELTA_GAUGE_SCALE, delta));
-  const pct = (clamped / DELTA_GAUGE_SCALE) * 50; // ±50% from center
-  const positive = delta >= 0;
+  // Filter 1 operates on SIGMAS, never raw delta. The bar is therefore drawn
+  // on the sigma scale; raw delta is kept as a secondary readout only.
+  const z = deltaZ ?? null;
+  const rejectAt = gate ?? DELTA_Z_REJECT;
+  const clamped = Math.max(-DELTA_Z_GAUGE_SCALE, Math.min(DELTA_Z_GAUGE_SCALE, z ?? 0));
+  const pct = (clamped / DELTA_Z_GAUGE_SCALE) * 50; // ±50% from center
+  const positive = (z ?? 0) >= 0;
 
-  // Would the middleware's Filter-1 reject an opposing entry right now?
-  const rejectsShorts = delta > DELTA_REJECT_THRESHOLD;
-  const rejectsLongs = delta < -DELTA_REJECT_THRESHOLD;
+  // Absent delta_z fails CLOSED server-side - every direction is rejected.
+  const feedDown = z == null;
+  const rejectsShorts = !feedDown && z! > rejectAt;
+  const rejectsLongs = !feedDown && z! < -rejectAt;
 
-  const tick = (value: number) => 50 + (value / DELTA_GAUGE_SCALE) * 50;
+  const tick = (value: number) => 50 + (value / DELTA_Z_GAUGE_SCALE) * 50;
 
   return (
     <div className="flex flex-col h-full gap-2">
@@ -131,31 +140,23 @@ function DeltaPressureGauge({
           className="qt-num text-lg font-bold"
           style={{ color: positive ? "var(--qt-long)" : "var(--qt-short)" }}
         >
-          {positive ? "+" : ""}
-          {Math.round(delta).toLocaleString()}
+          {feedDown ? "n/a" : `${positive ? "+" : ""}${z!.toFixed(2)}\u03c3`}
         </span>
         <span className="qt-num text-[9px]" style={{ color: "var(--qt-text-faint)" }}>
-          scale ±{DELTA_GAUGE_SCALE.toLocaleString()}
+          raw \u0394 {Math.round(delta).toLocaleString()} · gate ±{rejectAt}\u03c3
         </span>
       </div>
 
       {/* Bidirectional bar anchored at zero */}
       <div className="relative h-3.5 rounded" style={{ background: "var(--qt-surface-2)" }}>
         <span className="absolute inset-y-0 left-1/2 w-px" style={{ background: "var(--qt-border-strong)" }} />
-        {/* Decision-line ticks: ±300 middleware reject, ±500 Pine gate */}
-        {[-DELTA_SIGNAL_GATE, -DELTA_REJECT_THRESHOLD, DELTA_REJECT_THRESHOLD, DELTA_SIGNAL_GATE].map((v) => (
+        {/* Decision lines: ±0.75σ, where Filter 1 rejects an opposing entry */}
+        {[-rejectAt, rejectAt].map((v) => (
           <span
             key={v}
             className="absolute inset-y-0 w-px"
-            style={{
-              left: `${tick(v)}%`,
-              background: Math.abs(v) === DELTA_REJECT_THRESHOLD ? "rgb(244 63 94 / 0.55)" : "rgb(34 211 238 / 0.45)",
-            }}
-            title={
-              Math.abs(v) === DELTA_REJECT_THRESHOLD
-                ? `±${DELTA_REJECT_THRESHOLD}: middleware rejects opposing entries`
-                : `±${DELTA_SIGNAL_GATE}: Pine signal gate`
-            }
+            style={{ left: `${tick(v)}%`, background: "rgb(244 63 94 / 0.55)" }}
+            title={`±${rejectAt}\u03c3: Filter 1 rejects opposing entries`}
           />
         ))}
         <motion.span
@@ -172,11 +173,13 @@ function DeltaPressureGauge({
       </div>
 
       <span className="qt-num text-[9px] font-semibold" style={{ color: rejectsShorts || rejectsLongs ? "var(--qt-warn)" : "var(--qt-text-faint)" }}>
-        {rejectsShorts
-          ? `Filter 1: SHORT entries rejected while Δ > +${DELTA_REJECT_THRESHOLD}`
-          : rejectsLongs
-            ? `Filter 1: LONG entries rejected while Δ < −${DELTA_REJECT_THRESHOLD}`
-            : "Filter 1 clear — delta permits both directions"}
+        {feedDown
+          ? "Filter 1 FAIL-CLOSED — no delta_z from the Pine feed, all entries rejected"
+          : rejectsShorts
+            ? `Filter 1: SHORT entries rejected while \u0394z > +${rejectAt}\u03c3`
+            : rejectsLongs
+              ? `Filter 1: LONG entries rejected while \u0394z < \u2212${rejectAt}\u03c3`
+              : "Filter 1 clear — flow permits both directions"}
       </span>
 
       {/* Momentum sparkline */}
@@ -257,7 +260,12 @@ export function TelemetryMatrix() {
           <RegimeSpectrum regime={telemetry.market_regime} />
         </Cell>
         <Cell title="Volume Delta Pressure">
-          <DeltaPressureGauge delta={telemetry.volume_delta} history={deltaHistory} />
+          <DeltaPressureGauge
+            delta={telemetry.volume_delta}
+            deltaZ={telemetry.delta_z}
+            gate={telemetry.delta_z_gate}
+            history={deltaHistory}
+          />
         </Cell>
         <Cell title="Magnet Proximity Radar">
           <MagnetRadar
@@ -265,6 +273,7 @@ export function TelemetryMatrix() {
             refPrice={ctx.refPrice}
             atr={ctx.atr}
             asOf={ctx.asOf}
+            regime={telemetry.market_regime}
           />
         </Cell>
         <Cell title="Structure Compass">
